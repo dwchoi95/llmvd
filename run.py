@@ -19,15 +19,15 @@ def main() -> None:
     parser.add_argument(
         "-m",
         "--model",
-        default="gpt-3.5-turbo",
+        default="gpt-5",
         help="Model identifier to use for the chosen LLM backend.",
     )
     parser.add_argument(
         "-t",
         "--temperature",
         type=float,
-        default="0.0",
-        help="Temperature setting for the LLM (default: 0.0).",
+        default="1.0",
+        help="Temperature setting for the LLM (default: 1.0).",
     )
     parser.add_argument(
         "-l",

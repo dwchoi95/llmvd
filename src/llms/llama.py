@@ -5,9 +5,8 @@ from . import TextFormat
     
 class LLAMA:
     def __init__(self, 
-                 model:str="llama3:8b", 
-                 temperature:float=0.0,
-                 timeout:int=10):
+                 model:str="llama3.1:8b", 
+                 temperature:float=0.0):
         from dotenv import load_dotenv
         import os
         load_dotenv()
@@ -16,10 +15,9 @@ class LLAMA:
         self.host = LOCAL_API_URL
         self.model = model
         self.temperature = temperature
-        self.timeout = timeout
         self.client = AsyncClient(host=LOCAL_API_URL)
 
-    async def run(self, system:str, user:str, max_retry:int=1) -> str| None:
+    async def run(self, system:str, user:str) -> str| bool:
         try:
             response = await self.client.chat(
                 model=self.model,
@@ -29,7 +27,6 @@ class LLAMA:
                 ],
                 options={
                     "temperature": self.temperature,
-                    "timeout": self.timeout
                 },
                 format=TextFormat.model_json_schema()
             )
@@ -38,9 +35,6 @@ class LLAMA:
             return vulnerable
         except Exception as e:
             print(e)
-            import time
-            if max_retry > 0:
-                time.sleep(5)
-                return await self.run(system, user, max_retry-1)
+            pass
         return None
         

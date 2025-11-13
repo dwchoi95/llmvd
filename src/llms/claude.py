@@ -6,14 +6,13 @@ from . import TextFormat
 
 class CLAUDE:
     def __init__(self,
-                 model:str="claude-opus-4-1",
+                 model:str="claude-sonnet-4-5",
                  temperature:float=0.0):
         from dotenv import load_dotenv
         import os
         load_dotenv()
         CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
         
-        self.client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
         self.async_client = anthropic.AsyncAnthropic(api_key=CLAUDE_API_KEY)
         self.model = model
         self.temperature = temperature
@@ -37,7 +36,7 @@ class CLAUDE:
         vulnerable = " ".join(response_texts)
         return vulnerable
 
-    async def run(self, system:str, user:str, max_retries:int=1) -> str | None:
+    async def run(self, system:str, user:str) -> str | bool:
         try:
             response = await self.async_client.messages.create(
                 model=self.model,
@@ -59,11 +58,6 @@ class CLAUDE:
             )
             return self._extract_response(response)
         except Exception as e:
-            # sleep and retry
-            if max_retries > 0:
-                import time
-                time.sleep(10)
-                return await self.run(system, user, max_retries - 1)
-            else:
-                print(e)
+            print(e)
+            pass
         return None

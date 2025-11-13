@@ -1,5 +1,4 @@
 class PromptManager:
-    
     def render(self, **kwargs):
         file:str = kwargs.pop("file")
         
