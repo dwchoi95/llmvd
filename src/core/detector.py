@@ -1,5 +1,4 @@
 import os
-import ast
 import logging
 import asyncio
 from pathlib import Path
@@ -11,7 +10,7 @@ from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_sc
 import numpy as np
 
 from .evaluator import Evaluator
-from ..llms import GPT, CLAUDE, GEMINI, LLAMA
+from ..llms import GPT, CLAUDE, GEMINI, OLLAMA
 from ..prompts import PromptManager
 
 
@@ -31,7 +30,7 @@ class Detector:
         self.benchmark = Path(dataset_path).stem
         results_dir = Path(save_dir)
         results_dir.mkdir(parents=True, exist_ok=True)
-        self.save_file = results_dir / f"{self.benchmark}_{llm}"
+        self.save_file = results_dir / llm / f"{self.benchmark}"
         
         self.__scopes = ["function", "file", "repository"]
         self.model = self._select_model(llm, temperature)
@@ -54,16 +53,11 @@ class Detector:
         elif llm.startswith("gemini"):
             return GEMINI(llm, temperature)
         else:
-            return LLAMA(llm, temperature)
+            return OLLAMA(llm, temperature)
         raise ValueError(f"Unsupported model: {llm}")
 
     def _load_data(self, dataset_path: str) -> pd.DataFrame:
         return pd.read_json(dataset_path, lines=True)
-    
-    def _safe_eval(self, data:str) -> dict:
-        try: data = ast.literal_eval(data)
-        except: data = {"callee": [], "caller": []}
-        return data
     
     def _code_bleu(self, function:str, call:str, language:str) -> float:
         language = language.lower()
@@ -108,9 +102,8 @@ class Detector:
             )
         elif scope == "repository":
             repository = row.get("repository", {"callee": [], "caller": []})
-            calls = self._safe_eval(repository)
-            callees = self.priority(function, calls['callee'], language)
-            callers = self.priority(function, calls['caller'], language)
+            callees = self.priority(function, repository['callee'], language)
+            callers = self.priority(function, repository['caller'], language)
             repo_info = ""
             if callees:
                 repo_info += "### Callee Functions:\n"
@@ -153,16 +146,23 @@ class Detector:
             results.append(row_dict)
             pbar.update(1)
 
-    async def _detect(self) -> list:
+    async def _detect(self, total_task:int, dataset_df:pd.DataFrame) -> list:
         results = []
         idx = 0
-        total_task = len(self.dataset_df) * len(self.__scopes)
         pbar = tqdm_async(total=total_task, desc=self.benchmark)
         batch:list[asyncio.Task] = []
-        for _, row in self.dataset_df.iterrows():
-            for scope in self.__scopes:
-                idx += 1
+        for _, row in dataset_df.iterrows():
+            if 'index' in row:
+                idx = int(row['index'])
+                if pd.notnull(row['predict']) or pd.notna(row['predict']):
+                    results.append(row.to_dict())
+                    continue
+                scope = row['scope']
                 batch.append(asyncio.create_task(self.__task(idx, row, scope)))
+            else:
+                for scope in self.__scopes:
+                    idx += 1
+                    batch.append(asyncio.create_task(self.__task(idx, row, scope)))
             if len(batch) >= self.async_limit:
                 await self.__run(batch, results, pbar)
                 batch.clear()
@@ -172,13 +172,16 @@ class Detector:
         return results
       
     async def _async_run(self, save_path:str, reset:bool=False) -> pd.DataFrame:
-        results_df = pd.DataFrame()
+        results_df = self.dataset_df.copy()
+        total_tasks = len(results_df) * len(self.__scopes)
         if not reset and os.path.exists(save_path):
             results_df = pd.read_json(save_path, lines=True)
-        
-        if results_df.empty:
+            nan_rows = results_df[results_df['predict'].isna()]
+            total_tasks = len(nan_rows)
+            
+        if total_tasks > 0:
             # Detection
-            results = await self._detect()
+            results = await self._detect(total_tasks, results_df)
             # Save Repair Results
             results_df = pd.DataFrame(results)
             results_df.to_json(save_path, orient='records', lines=True)

@@ -5,14 +5,14 @@ from pydantic import BaseModel
 class TextFormat(BaseModel):
     vulnerable: bool
 
-__all__ = ["TextFormat", "GPT", "CLAUDE", "GEMINI", "LLAMA"]
+__all__ = ["TextFormat", "GPT", "CLAUDE", "GEMINI", "OLLAMA"]
 
 # 타입 체커용(런타임 임포트 안 함)
 if _t.TYPE_CHECKING:
     from .gpt import GPT
     from .claude import CLAUDE
     from .gemini import GEMINI
-    from .llama import LLAMA
+    from .ollama import OLLAMA
 
 # 지연 재노출로 순환 방지
 def __getattr__(name: str):
@@ -25,7 +25,7 @@ def __getattr__(name: str):
     if name == "GEMINI":
         from .gemini import GEMINI
         return GEMINI
-    if name == "LLAMA":
-        from .llama import LLAMA
-        return LLAMA
+    if name == "OLLAMA":
+        from .ollama import OLLAMA
+        return OLLAMA
     raise AttributeError(f"module {__name__} has no attribute {name}")

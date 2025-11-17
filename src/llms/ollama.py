@@ -3,7 +3,7 @@ from ollama import AsyncClient
 from . import TextFormat
 
     
-class LLAMA:
+class OLLAMA:
     def __init__(self, 
                  model:str="llama3.1:8b", 
                  temperature:float=0.0):
