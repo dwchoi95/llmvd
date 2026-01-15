@@ -40,6 +40,23 @@
     ```
     Then, open `.env` and fill in your keys.
 
+### Load Data
+
+* [**Dataset**](https://drive.usercontent.google.com/download?id=1HfBrlC2WHsveyE5GNHyOvakQoS0_Vwn0&confirm=t)
+  
+    ```bash
+    gdown "https://drive.google.com/uc?id=1HfBrlC2WHsveyE5GNHyOvakQoS0_Vwn0" -O data.zip
+    unzip data.zip
+    ```
+
+* **(Optional)** [**Results**](https://drive.usercontent.google.com/download?id=1fwObdsBjzFMLGQMtW4wMVu1EbTthJAHi&confirm=t)
+
+    ```bash
+    gdown "https://drive.google.com/file/d/1fwObdsBjzFMLGQMtW4wMVu1EbTthJAHi" -O results.zip
+    unzip results.zip
+    ```
+   
+
 ## How to Use
    
 ```bash
