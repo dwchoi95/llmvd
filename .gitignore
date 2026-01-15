@@ -213,5 +213,4 @@ __marimo__/
 codeql/
 results/
 data/
-figures/
-tables/
+bench.ipynb

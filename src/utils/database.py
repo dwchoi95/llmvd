@@ -11,8 +11,8 @@ class Database:
         self.BASE_URL = "https://github.com"
         self.BASE_DIR = Path("codeql").resolve()
         self.DEFAULT_ENV = {
-            "GIT_LFS_SKIP_SMUDGE": "1",   # 체크아웃/리셋 시 LFS 객체 다운로드 금지
-            "GIT_TERMINAL_PROMPT": "0",   # 인증 프롬프트 방지
+            "GIT_LFS_SKIP_SMUDGE": "1", 
+            "GIT_TERMINAL_PROMPT": "0",
         }
     
     def subprocess_run(self, cmd, cwd=None, ignore_error=False, env=None, timeout=None):
@@ -74,7 +74,7 @@ class Database:
     def filter(self, df:pd.DataFrame, save_path:str) -> pd.DataFrame:
         new_df = []
         for index, row in df.iterrows():
-            # skip outdated records (이 커밋 이후에도 취약점 수정이 이루어진 경우 스킵)
+            # skip outdated records
             outdated = row['outdated']
             if outdated == 1: continue
             
@@ -93,8 +93,8 @@ class Database:
             
             data = []
             for detail in details:
-                # CVE 언어와 파일 언어가 다른 경우 스킵
-                if "file_language" not in detail:
+                # Skip if CVE language and file language are different
+                if "file_language" in detail:
                     file_ext = detail["file_language"].lower()
                     if language == "python" :
                         if file_ext != "py":
@@ -108,7 +108,7 @@ class Database:
                     elif language == "java":
                         if file_ext != "java":
                             continue
-                    continue
+                else: continue
                 
                 # filter only single function changes
                 function_before = detail.get("function_before", [])
@@ -170,11 +170,11 @@ class Database:
                 new_df.extend(data)
         new_df = pd.DataFrame(new_df)
 
-        # project별로 정렬하고 같은 project, commit_id 묶어서 처리 속도 향상
+        # Sort by project and commit_id to improve processing speed
         new_df = new_df.sort_values(by=['project', 'commit_id']).reset_index(drop=True)
         new_df = new_df.drop_duplicates().reset_index(drop=True)
 
-        # new_df 저장
+        # Save new_df
         new_df.to_json(save_path, orient='records', lines=True)
         return new_df
 
@@ -278,7 +278,7 @@ class Database:
                 print(func_name)
                 print(function)
                 print(f"[error] {project}@{commit_id[:12]}: {e}")
-                # stderr도 출력하면 디버깅에 도움됨
+                # Printing stderr would be helpful for debugging
                 if hasattr(e, 'stderr'):
                     print(f"[stderr] {e.stderr}")
                 break

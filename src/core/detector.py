@@ -8,6 +8,7 @@ from codebleu import calc_codebleu
 from tqdm.asyncio import tqdm as tqdm_async
 from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score, classification_report
 import numpy as np
+from prettytable import PrettyTable
 
 from .evaluator import Evaluator
 from ..llms import GPT, CLAUDE, GEMINI, OLLAMA
@@ -28,11 +29,12 @@ class Detector:
         repo_prompt_file:str="src/prompts/detection/repository.md"
     ):
         self.benchmark = Path(dataset_path).stem
-        results_dir = Path(save_dir)
-        results_dir.mkdir(parents=True, exist_ok=True)
-        self.save_file = results_dir / llm / f"{self.benchmark}"
+        self.results_dir = Path(save_dir) / llm
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.save_file = self.results_dir / f"{self.benchmark}"
         
         self.__scopes = ["function", "file", "repository"]
+        self.__rows = ["Trial", "Scope", "Accuracy", "Precision", "Recall", "F1-score", "AVG Tokens", "AVG Time (sec)"]
         self.model = self._select_model(llm, temperature)
         self.pm = PromptManager()
         self.system = self.pm.render(file=system_prompt_file)
@@ -106,11 +108,11 @@ class Detector:
             callers = self.priority(function, repository['caller'], language)
             repo_info = ""
             if callees:
-                repo_info += "### Callee Functions:\n"
+                repo_info += "### Functions called by the Target Function (Callees):\n"
                 for callee in callees:
                     repo_info += f"#### File: {callee['file']}\n```{language}\n{callee['function']}\n```\n"
             if callers:
-                repo_info += "### Caller Functions:\n"
+                repo_info += "### Functions that call the Target Function (Callers):\n"
                 for caller in callers:
                     repo_info += f"#### File: {caller['file']}\n```{language}\n{caller['function']}\n```\n"
             user = self.pm.render(
@@ -187,192 +189,92 @@ class Detector:
             results_df.to_json(save_path, orient='records', lines=True)
         return results_df
     
-    def summary(self, executions):
-        """n개의 실행 결과를 평가"""
-        
-        # 각 실행별 결과를 저장할 리스트
-        all_metrics = []
-        all_tokens = []
-        all_times = []
-        
-        # 전체 데이터를 모을 리스트
-        all_results = []
-        
-        for trial in range(executions):
-            save_path = str(self.save_file) + f"_{trial+1}.jsonl" \
-                if executions > 1 else str(self.save_file) + ".jsonl"
-            results_df = pd.read_json(save_path, lines=True)
+    def convert_to_bool(self, val):
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            if val == 1 or val == 1.0:
+                return True
+            elif val == 0 or val == 0.0:
+                return False
+        if isinstance(val, str):
+            if val.lower() == 'true':
+                return True
+            elif val.lower() == 'false':
+                return False
+        return None
+
+    def summary(self, results_df:pd.DataFrame, trial:int) -> pd.DataFrame:
+        data = []
+        table = PrettyTable(self.__rows)
+        for scope in self.__scopes:
+            scope_df = results_df[results_df['scope'] == scope]
+            scope_df = scope_df.copy()
+            scope_df['predict'] = scope_df['predict'].apply(self.convert_to_bool)
+            scope_df = scope_df.dropna(subset=['predict', 'vulnerable'])
+
+            y_trues = scope_df['vulnerable'].tolist()
+            y_preds = scope_df['predict'].tolist()
             
-            # 1. 분류 성능 지표 계산
-            y_true = results_df['vulnerable'].values
-            y_pred = results_df['predict'].values
+            f1 = f1_score(y_trues, y_preds, zero_division=0)
+            pre = precision_score(y_trues, y_preds, zero_division=0)
+            rec = recall_score(y_trues, y_preds, zero_division=0)
+            acc = accuracy_score(y_trues, y_preds)
+            tok = scope_df['tokens'].mean()
+            time = scope_df['Time (sec)'].mean()
+            table.add_row([trial, scope.capitalize(), 
+                f"{acc:.3f}", f"{pre:.3f}", f"{rec:.3f}", f"{f1:.3f}", 
+                f"{tok:.0f}", f"{time:.2f}"])
+            data.append({
+                'Trial': trial,
+                'Scope': scope,
+                'Accuracy': acc,
+                'Precision': pre,
+                'Recall': rec,
+                'F1-score': f1,
+                'AVG Tokens': tok,
+                'AVG Time (sec)': time
+            })
             
-            # NaN/None 값 확인 및 처리
-            # pd.isna()는 None과 NaN 모두 처리
-            valid_mask = ~pd.isna(y_pred)
-            n_total = len(y_pred)
-            n_valid = valid_mask.sum()
-            n_invalid = n_total - n_valid
-            
-            # 유효한 예측만 필터링
-            y_true_valid = y_true[valid_mask]
-            y_pred_valid = y_pred[valid_mask]
-            
-            if n_valid > 0:
-                metrics = {
-                    'trial': trial + 1,
-                    'accuracy': accuracy_score(y_true_valid, y_pred_valid),
-                    'precision': precision_score(y_true_valid, y_pred_valid, zero_division=0),
-                    'recall': recall_score(y_true_valid, y_pred_valid, zero_division=0),
-                    'f1_score': f1_score(y_true_valid, y_pred_valid, zero_division=0),
-                    'n_total': n_total,
-                    'n_valid': n_valid,
-                    'n_invalid': n_invalid,
-                    'valid_rate': n_valid / n_total if n_total > 0 else 0
-                }
-            else:
-                # 모든 예측이 실패한 경우
-                metrics = {
-                    'trial': trial + 1,
-                    'accuracy': 0.0,
-                    'precision': 0.0,
-                    'recall': 0.0,
-                    'f1_score': 0.0,
-                    'n_total': n_total,
-                    'n_valid': 0,
-                    'n_invalid': n_invalid,
-                    'valid_rate': 0.0
-                }
-            
-            all_metrics.append(metrics)
-            
-            # 2. Tokens 통계
-            all_tokens.extend(results_df['tokens'].values)
-            
-            # 3. Time 통계
-            all_times.extend(results_df['Time (sec)'].values)
-            
-            # 전체 데이터 저장
-            all_results.append(results_df)
-            
-            print(f"\n{'='*50}")
-            print(f"Trial {trial + 1} Results:")
-            print(f"{'='*50}")
-            print(f"Accuracy:  {metrics['accuracy']:.4f}")
-            print(f"Precision: {metrics['precision']:.4f}")
-            print(f"Recall:    {metrics['recall']:.4f}")
-            print(f"F1-Score:  {metrics['f1_score']:.4f}")
-        
-        # 종합 통계 계산
-        metrics_df = pd.DataFrame(all_metrics)
-        
-        print(f"\n{'='*50}")
-        print(f"SUMMARY ACROSS {executions} TRIALS")
-        print(f"{'='*50}")
-        
-        # 성능 지표 요약
-        print("\n[Classification Metrics]")
-        for metric in ['accuracy', 'precision', 'recall', 'f1_score']:
-            mean_val = metrics_df[metric].mean()
-            std_val = metrics_df[metric].std()
-            print(f"{metric.capitalize():12s}: {mean_val:.4f} ± {std_val:.4f}")
-        
-        # Tokens 통계
-        print("\n[Token Usage]")
-        print(f"Mean:   {np.mean(all_tokens):.2f} ± {np.std(all_tokens):.2f}")
-        print(f"Median: {np.median(all_tokens):.2f}")
-        print(f"Min:    {np.min(all_tokens)}")
-        print(f"Max:    {np.max(all_tokens)}")
-        
-        # Time 통계
-        print("\n[Execution Time (sec)]")
-        print(f"Mean:   {np.mean(all_times):.2f} ± {np.std(all_times):.2f}")
-        print(f"Median: {np.median(all_times):.2f}")
-        print(f"Min:    {np.min(all_times):.2f}")
-        print(f"Max:    {np.max(all_times):.2f}")
-        print(f"Total:  {np.sum(all_times):.2f}")
-        
-        # Optional: 전체 데이터 종합 분석
-        if executions > 1:
-            combined_df = pd.concat(all_results, ignore_index=True)
-            y_true_combined = combined_df['vulnerable'].values
-            y_pred_combined = combined_df['predict'].values
-            
-            print(f"\n[Overall Performance (All Trials Combined)]")
-            print(f"Total samples: {len(combined_df)}")
-            print(f"Accuracy:  {accuracy_score(y_true_combined, y_pred_combined):.4f}")
-            print(f"Precision: {precision_score(y_true_combined, y_pred_combined, zero_division=0):.4f}")
-            print(f"Recall:    {recall_score(y_true_combined, y_pred_combined, zero_division=0):.4f}")
-            print(f"F1-Score:  {f1_score(y_true_combined, y_pred_combined, zero_division=0):.4f}")
-            
-            # # 클래스 분포 확인
-            # print(f"\n[Class Distribution]")
-            # print(f"True - Vulnerable: {y_true_combined.sum()} ({y_true_combined.sum()/len(y_true_combined)*100:.1f}%)")
-            # print(f"True - Not Vulnerable: {(~y_true_combined).sum()} ({(~y_true_combined).sum()/len(y_true_combined)*100:.1f}%)")
-            # print(f"Pred - Vulnerable: {y_pred_combined.sum()} ({y_pred_combined.sum()/len(y_pred_combined)*100:.1f}%)")
-            # print(f"Pred - Not Vulnerable: {(~y_pred_combined).sum()} ({(~y_pred_combined).sum()/len(y_pred_combined)*100:.1f}%)")
-            
-            # # Confusion Matrix
-            # print("\n[Confusion Matrix]")
-            # cm = confusion_matrix(y_true_combined, y_pred_combined)
-            # print("                  Predicted")
-            # print("                  Not Vuln  Vulnerable")
-            # print(f"Actual Not Vuln   {cm[0, 0]:8d}  {cm[0, 1]:10d}")
-            # print(f"Actual Vulnerable {cm[1, 0]:8d}  {cm[1, 1]:10d}")
-            
-            # # Classification Report (수정된 부분)
-            # print("\n[Classification Report]")
-            # # 실제 데이터에 존재하는 클래스 확인
-            # unique_classes = np.unique(np.concatenate([y_true_combined, y_pred_combined]))
-            
-            # if len(unique_classes) == 2:
-            #     # 두 클래스가 모두 존재할 때
-            #     print(classification_report(
-            #         y_true_combined, 
-            #         y_pred_combined, 
-            #         labels=[False, True],
-            #         target_names=['Not Vulnerable', 'Vulnerable'],
-            #         zero_division=0
-            #     ))
-            # else:
-            #     # 한 클래스만 존재할 때
-            #     print(f"Warning: Only one class present in data: {unique_classes}")
-            #     print(classification_report(
-            #         y_true_combined, 
-            #         y_pred_combined,
-            #         zero_division=0
-            #     ))
-        
-        # 결과를 DataFrame으로 반환
-        summary_dict = {
-            'metrics_per_trial': metrics_df,
-            'token_stats': {
-                'mean': np.mean(all_tokens),
-                'std': np.std(all_tokens),
-                'median': np.median(all_tokens),
-                'min': np.min(all_tokens),
-                'max': np.max(all_tokens)
-            },
-            'time_stats': {
-                'mean': np.mean(all_times),
-                'std': np.std(all_times),
-                'median': np.median(all_times),
-                'min': np.min(all_times),
-                'max': np.max(all_times),
-                'total': np.sum(all_times)
-            }
-        }
-        
-        return summary_dict
-                    
+        print(table)
+        df = pd.DataFrame(data)
+        return df
+    
     async def _run_trials(self, executions:int, reset:bool) -> None:
+        overall = []
         for trial in range(1, executions+1):
             save_path = str(self.save_file) + f"_{trial}.jsonl" \
             if executions > 1 else str(self.save_file) + ".jsonl"
-            await self._async_run(save_path, reset)
+            results_df = await self._async_run(save_path, reset)
+            summary_df = self.summary(results_df, trial)
+            overall.append(summary_df)
+            
+        overall_df = pd.concat(overall, ignore_index=True)
+        overall_save_path = self.results_dir / "result.csv"
+        overall_df.to_csv(overall_save_path, index=False)
+        
+        table = PrettyTable(self.__rows[1:])
+        grouped = overall_df.groupby('Scope').agg({
+            'Accuracy': ['mean', 'std'],
+            'Precision': ['mean', 'std'],
+            'Recall': ['mean', 'std'],
+            'F1-score': ['mean', 'std'],
+            'AVG Tokens': ['mean', 'std'],
+            'AVG Time (sec)': ['mean', 'std']
+        })
+        for scope in self.__scopes:
+            table.add_row([
+                scope.capitalize(),
+                f"{grouped.loc[scope, ('Accuracy', 'mean')]:.3f} ± {grouped.loc[scope, ('Accuracy', 'std')]:.3f}",
+                f"{grouped.loc[scope, ('Precision', 'mean')]:.3f} ± {grouped.loc[scope, ('Precision', 'std')]:.3f}",
+                f"{grouped.loc[scope, ('Recall', 'mean')]:.3f} ± {grouped.loc[scope, ('Recall', 'std')]:.3f}",
+                f"{grouped.loc[scope, ('F1-score', 'mean')]:.3f} ± {grouped.loc[scope, ('F1-score', 'std')]:.3f}",
+                f"{grouped.loc[scope, ('AVG Tokens', 'mean')]:.0f} ± {grouped.loc[scope, ('AVG Tokens', 'std')]:.0f}",
+                f"{grouped.loc[scope, ('AVG Time (sec)', 'mean')]:.2f} ± {grouped.loc[scope, ('AVG Time (sec)', 'std')]:.2f}"
+            ])
+            
+        print(table)
             
     def run(self, executions:int, reset:bool=False) -> pd.DataFrame:
         asyncio.run(self._run_trials(executions, reset))
         
-        # summary_dict = self.summary(executions)
-        # print(summary_dict)

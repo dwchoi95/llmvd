@@ -14,7 +14,7 @@ class GPT:
         self.model = model
         self.temperature = temperature
 
-    async def run(self, system:str, user:str) -> str | None:
+    async def run(self, system:str, user:str, retry:int=3) -> str | None:
         try:
             response = await self.client.responses.parse(
                 model=self.model,
@@ -31,5 +31,8 @@ class GPT:
                 return vulnerable
         except Exception as e:
             print(e)
+            # import time
+            # time.sleep(60)
+            # return await self.run(system, user, retry - 1)
             pass
         return None
