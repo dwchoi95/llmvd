@@ -52,7 +52,7 @@
 * **(Optional)** [**Results**](https://drive.usercontent.google.com/download?id=1fwObdsBjzFMLGQMtW4wMVu1EbTthJAHi&confirm=t)
 
     ```bash
-    gdown "https://drive.google.com/file/d/1fwObdsBjzFMLGQMtW4wMVu1EbTthJAHi" -O results.zip
+    gdown "https://drive.google.com/uc?id=1fwObdsBjzFMLGQMtW4wMVu1EbTthJAHi" -O results.zip
     unzip results.zip
     ```
    
