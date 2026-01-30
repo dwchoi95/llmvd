@@ -26,8 +26,8 @@ def main() -> None:
         "-t",
         "--temperature",
         type=float,
-        default="1.0",
-        help="Temperature setting for the LLM (default: 1.0).",
+        default=0.0,
+        help="Temperature setting for the LLM (default: 0.0).",
     )
     parser.add_argument(
         "-l",
