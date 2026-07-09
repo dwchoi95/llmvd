@@ -49,15 +49,28 @@ def main() -> None:
         action="store_true",
         help="Reset the experiment results.",
     )
+    parser.add_argument(
+        "-p",
+        "--strategies",
+        default=None,
+        help="Comma-separated prompting strategies "
+             "(zero_shot,few_shot,cot,think_verify). Default: all four.",
+    )
 
     args = parser.parse_args()
+
+    strategies = (
+        [s.strip() for s in args.strategies.split(",") if s.strip()]
+        if args.strategies else None
+    )
 
     detector = Detector(
         llm=args.model,
         temperature=args.temperature,
-        dataset_path=args.dataset, 
+        dataset_path=args.dataset,
         save_dir=args.savedir,
-        async_limit=args.limit)
+        async_limit=args.limit,
+        strategies=strategies)
     detector.run(
         executions=args.executions,
         reset=args.reset)

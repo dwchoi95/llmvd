@@ -13,10 +13,12 @@ class GPT:
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         self.model = model
         self.temperature = temperature
+        # reasoning effort for reasoning models (gpt-5 family); low keeps cost down
+        self.reasoning_effort = os.getenv("GPT_REASONING_EFFORT")
 
     async def run(self, system:str, user:str, retry:int=3) -> str | None:
         try:
-            response = await self.client.responses.parse(
+            kwargs = dict(
                 model=self.model,
                 temperature=self.temperature,
                 input=[
@@ -25,6 +27,9 @@ class GPT:
                 ],
                 text_format=TextFormat,
             )
+            if self.reasoning_effort and self.model.startswith("gpt-5"):
+                kwargs["reasoning"] = {"effort": self.reasoning_effort}
+            response = await self.client.responses.parse(**kwargs)
             model = getattr(response, "output_parsed", None)
             if model is not None:
                 vulnerable = getattr(model, "vulnerable", None)

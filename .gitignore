@@ -214,3 +214,6 @@ codeql/
 results/
 data/
 bench.ipynb
+paper/
+tools/
+CLAUDE.md

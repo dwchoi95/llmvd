@@ -51,25 +51,29 @@ class Database:
         repo_dir = self.BASE_DIR / language / "repo" / self.safe_name(owner_repo)
         if not repo_dir.exists():
             repo_url = f"{self.BASE_URL.rstrip('/')}/{owner_repo}.git"
-            self.subprocess_run(["git", "clone", "--filter=blob:none", "--no-tags", repo_url, str(repo_dir)])
+            self.subprocess_run(["git", "clone", "--filter=blob:none", "--no-tags", repo_url, str(repo_dir)], timeout=900)
         self.disable_lfs(repo_dir)
         return repo_dir
-    
+
     def ensure_commit_fetched(self, repo_dir: Path, commit_id: str):
         try:
             self.subprocess_run(["git", "-C", str(repo_dir), "rev-parse", "--verify", commit_id])
         except RuntimeError:
-            self.subprocess_run(["git", "-C", str(repo_dir), "fetch", "origin", commit_id, "--depth=1"])
+            self.subprocess_run(["git", "-C", str(repo_dir), "fetch", "origin", commit_id, "--depth=1"], timeout=300)
             self.subprocess_run(["git", "-C", str(repo_dir), "rev-parse", "--verify", commit_id])
-            
-    def checkout_commit(self, repo_dir: Path, commit_id: str):
+
+    def checkout_commit(self, repo_dir: Path, commit_id: str, with_submodules: bool = True):
         self.ensure_commit_fetched(repo_dir, commit_id)
         self.subprocess_run(["git", "-C", str(repo_dir), "reset", "--hard"])
         self.subprocess_run(["git", "-C", str(repo_dir), "clean", "-fdx"])
         self.subprocess_run(["git", "-C", str(repo_dir), "checkout", "--detach", commit_id])
         self.subprocess_run(["git", "-C", str(repo_dir), "reset", "--hard", commit_id])
         self.subprocess_run(["git", "-C", str(repo_dir), "clean", "-fdx"])
-        self.subprocess_run(["git", "-C", str(repo_dir), "submodule", "update", "--init", "--recursive"], ignore_error=True)
+        # Submodule recursion can hang indefinitely on ssh/git:// submodule URLs and is
+        # unnecessary for directory-level call-graph extraction; opt-in only.
+        if with_submodules:
+            self.subprocess_run(["git", "-C", str(repo_dir), "submodule", "update", "--init", "--recursive"],
+                                ignore_error=True, timeout=300)
 
     def filter(self, df:pd.DataFrame, save_path:str) -> pd.DataFrame:
         new_df = []
@@ -248,7 +252,7 @@ class Database:
                     logs.append(f"[ready] {project}@{commit_id[:12]} -> {repo_dir}")
                     
                     build_shell = open(os.path.join("codeql", language, "build.sh"), "r").read()
-                    build_script = build_shell.format(script_dir=script_dir, repo=repo)
+                    build_script = build_shell.format(script_dir=script_dir, repo=repo, repo_dir=str(repo_dir))
                     subprocess.run(
                         ["bash", "-lc", build_script],
                         text=True, capture_output=True, check=True
@@ -265,7 +269,7 @@ class Database:
                 logs.append("[prep] Query prepared.")
                 
                 run_shell = open(os.path.join("codeql", language, "run.sh"), "r").read()
-                run_script = run_shell.format(script_dir=script_dir)
+                run_script = run_shell.format(script_dir=script_dir, repo=repo)
                 calls = subprocess.run(
                     ["bash", "-lc", run_script], 
                     text=True, capture_output=True, check=True,
