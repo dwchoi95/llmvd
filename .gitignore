@@ -215,5 +215,4 @@ results/
 models/
 # models archive is hosted on Google Drive, not committed
 models.tar.gz
-paper/
-CLAUDE.md
+
