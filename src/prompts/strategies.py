@@ -1,37 +1,46 @@
-"""Prompting-strategy registry for the scope x prompting x tier experiment.
+"""Prompting-strategy registry for the scope x strategy experiment.
 
-Each strategy pairs a system-prompt template with the decoding budget it needs.
-Reasoning strategies (CoT, Think&Verify) emit their verdict on a final
-`FINAL: 1/0` line after free-text reasoning, so they need a large token budget;
-direct strategies (zero-shot, few-shot) emit a single `1`/`0` token.
+Three strategies, each an intervention of a different KIND:
 
-The score-capture client (OLLAMA.run_scored) locates the decision token by
-scanning for the LAST positive/negative answer token, which works for both the
-single-token and the `FINAL: x` forms.
+  * zero — the baseline: the target (+ scope context) with a zero-shot
+           instruction. Prompt folder: src/prompts/zero/.
+  * rag  — a PROMPT-level intervention: prepend one retrieved vulnerable and
+           one retrieved non-vulnerable example (GRACE-style). Prompt folder:
+           src/prompts/rag/. Needs the example file (uses_examples=True).
+  * sft  — a WEIGHT-level intervention: the SAME zero prompt, but served by a
+           model fine-tuned on the training corpus. No prompt of its own —
+           it reuses the zero folder; the difference is which model serves it.
+
+`reasoning` (whether the served model emits a thinking trace before its
+verdict) is a MODEL property, not a strategy property, so it lives on the
+Detector, not here. Both direct-answer and thinking models run all three
+strategies.
 """
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class Strategy:
-    name: str
-    system_file: str
-    max_tokens: int
-    reasoning: bool  # True => free-text reasoning precedes the verdict
+    name: str          # results key: "zero" | "rag" | "sft" | "cot"
+    prompt_dir: str    # which src/prompts/<dir>/ folder to render from
+    uses_examples: bool  # rag injects retrieved vul/non-vul examples
+    free_form: bool = False  # cot: no JSON-schema forcing; model reasons in-channel before the verdict
 
-
-_DIR = "src/prompts/detection/strategies"
 
 STRATEGIES: dict[str, Strategy] = {
-    # direct: schema-forced JSON verdict {"vulnerable": 0|1} (needs ~6-10 tokens)
-    "zero_shot":    Strategy("zero_shot",    f"{_DIR}/zero_shot.md",    max_tokens=16,  reasoning=False),
-    "few_shot":     Strategy("few_shot",     f"{_DIR}/few_shot.md",     max_tokens=16,  reasoning=False),
-    # reasoning, verdict on final line
-    "cot":          Strategy("cot",          f"{_DIR}/cot.md",          max_tokens=768, reasoning=True),
-    "think_verify": Strategy("think_verify", f"{_DIR}/think_verify.md", max_tokens=1024, reasoning=True),
+    "zero": Strategy("zero", "zero", uses_examples=False),
+    "rag":  Strategy("rag",  "rag",  uses_examples=True),
+    # sft reuses the zero prompt; the intervention is the fine-tuned model
+    "sft":  Strategy("sft",  "zero", uses_examples=False),
+    # cot — a PROMPT-level reasoning control: same inputs, but the system
+    # prompt asks for step-by-step reasoning before the final JSON verdict.
+    # Free-form output (no schema forcing) so non-reasoning models get an
+    # in-channel scratchpad; used to test whether "reasoning" is a model
+    # property or merely permission to reason (threats: construct validity).
+    "cot":  Strategy("cot",  "cot",  uses_examples=False, free_form=True),
 }
 
-DEFAULT_STRATEGIES = ["zero_shot", "few_shot", "cot", "think_verify"]
+DEFAULT_STRATEGIES = ["zero", "rag"]
 
 
 def get_strategy(name: str) -> Strategy:

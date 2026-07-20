@@ -54,16 +54,30 @@ class Evaluator:
     
     _TOK_CACHE = {}
 
-    def transformer(self, prompt:str, model:str="llama3.1:8b") -> int:
+    def transformer(self, prompt:str, model:str="qwen3-30b-instruct") -> int:
+        # experiment panel (pair-pair-pair): map the clean served-model-id
+        # (what run.py -m and vLLM --served-model-name use) to the HF repo
+        # whose tokenizer to load. The NVIDIA hybrid serves both modes from the
+        # same repo (two clean ids). A raw HF id ('/') is used directly;
+        # anything unmapped falls back to a tiktoken estimate.
         models = {
-            "llama3.1:8b": "NousResearch/Meta-Llama-3.1-8B-Instruct",
-            "deepseek-coder-v2:16b": "deepseek-ai/DeepSeek-Coder-V2-Base",
-            "phi3:14b": "microsoft/Phi-3-medium-128k-instruct",
-            "mistral-nemo:12b": "mistralai/Mistral-Nemo-Instruct-2407",
-            "qwen3-coder:30b": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-            "qwen2.5-coder:14b": "Qwen/Qwen2.5-Coder-14B-Instruct",
-            "deepseek-coder-v2:16b": "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct",
+            # Qwen pair (separate checkpoints)
+            "qwen3-30b-instruct": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+            "qwen3-30b-thinking": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+            # Mistral pair (separate checkpoints)
+            "mistral-small:24b": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+            "magistral-small:24b": "mistralai/Magistral-Small-2509",
+            # NVIDIA pair (one hybrid, toggled by control token; same tokenizer)
+            "nemotron-nano:12b": "nvidia/NVIDIA-Nemotron-Nano-12B-v2",
+            "nemotron-nano-think:12b": "nvidia/NVIDIA-Nemotron-Nano-12B-v2",
         }
+        # sft adapters are served as "<base>-sft" (the vLLM lora-module id);
+        # they share the base checkpoint's tokenizer.
+        if model.endswith("-sft") and model[:-4] in models:
+            models[model] = models[model[:-4]]
+        # a raw HF repo id (contains '/') is a valid tokenizer source as-is
+        if model not in models and "/" in model:
+            models[model] = model
         # Cache tokenizers (avoid reloading per row) and fall back to a
         # tiktoken estimate if the HF tokenizer/config is incompatible
         # (e.g. Phi-3 'longrope' validation under newer transformers).

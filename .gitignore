@@ -210,10 +210,10 @@ __marimo__/
 # MacOS
 .DS_Store
 
-codeql/
-results/
 data/
-bench.ipynb
+results/
+models/
+# models archive is hosted on Google Drive, not committed
+models.tar.gz
 paper/
-tools/
 CLAUDE.md

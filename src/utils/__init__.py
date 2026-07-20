@@ -1,3 +1,3 @@
-from .funcNameParser import FuncNameParser
-from .ted import TED
-from .database import Database
+from .dataset import Dataset
+from .callgraph import CallGraph
+from .treesitter import TreeSitter

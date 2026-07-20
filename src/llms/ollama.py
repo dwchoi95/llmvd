@@ -22,13 +22,18 @@ def _norm(tok: str) -> str:
 class OLLAMA:
     def __init__(self,
                  model: str = "llama3.1:8b",
-                 temperature: float = 0.0):
+                 temperature: float | None = None):
         from dotenv import load_dotenv
         load_dotenv()
         LOCAL_API_URL = os.getenv("LOCAL_API_URL")
 
         self.host = (LOCAL_API_URL or "").rstrip("/")
         self.model = model
+        # None => do not send temperature/top_p; the server applies the served
+        # model's own generation_config defaults (reproducibility: each model
+        # runs at its shipped sampling settings). Our score comes from the
+        # verdict-token LOGPROBS, which are pre-sampling and hence unaffected by
+        # temperature, so leaving it at the model default does not bias scores.
         self.temperature = temperature
         self.client = AsyncClient(host=LOCAL_API_URL)
         # OpenAI-compatible endpoint (Ollama serves it at /v1) -- the only path
@@ -74,24 +79,31 @@ class OLLAMA:
         "required": ["vulnerable"],
     }
 
+    # generous transport timeout: with the client keeping the server's queue
+    # full, a request's clock includes queue wait + 32k-token prompt
+    # processing + up to 1024 generated tokens. 300s was observed to mass-
+    # expire reasoning calls whenever the server got contended.
     async def run_scored(self, system: str, user: str,
                          max_tokens: int = 16,
                          reasoning: bool = False,
                          top_logprobs: int = 20,
-                         timeout: float = 300.0):
+                         timeout: float = 900.0):
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": self.temperature,
             "max_tokens": max_tokens,
             "logprobs": True,
             "top_logprobs": top_logprobs,
         }
+        # only override temperature if explicitly set; otherwise the server
+        # uses the served model's generation_config default (reproducibility)
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
         # direct strategies: constrain output to JSON so it never rambles.
-        # reasoning strategies stay free-form (they must reason before FINAL).
+        # reasoning strategies stay free-form (they must reason before verdict).
         if not reasoning:
             payload["response_format"] = {
                 "type": "json_schema",
@@ -161,30 +173,40 @@ class OLLAMA:
         """Return (label, score).
 
         Both come from the verdict position's logprob DISTRIBUTION, not the
-        sampled token: Ollama's /v1 endpoint does not always honour
-        temperature=0 (it can emit a lower-probability token), so the sampled
-        digit is neither deterministic nor reliable, whereas P('1') vs P('0')
-        is. label = (score >= 0.5) keeps the hard label consistent with the
-        score and with the ROC operating point.
+        sampled token: the /v1 endpoint does not always honour temperature=0
+        (it can emit a lower-probability token), so the sampled digit is
+        neither deterministic nor reliable, whereas P('1') vs P('0') is.
+        label = (score >= 0.5) keeps the hard label consistent with the score
+        and with the ROC operating point.
 
-        Reasoning strategies emit a `FINAL: 1/0` line -> scan forward from the
-        last `final` marker for the first committed digit. Direct strategies emit
-        the verdict up front -> scan the first few positions. When a reasoning
-        answer never reaches FINAL, fall back to the last committed digit.
+        Reasoning models emit a thinking trace and then the verdict, so the
+        answer is AFTER the last `</think>` (or `final`) marker -> scan forward
+        from there for the first committed digit; fall back to the last
+        committed digit anywhere. Direct models emit the schema-forced JSON
+        verdict up front -> scan the first few positions ({"vulnerable": <d>).
         """
         content = (logprobs or {}).get("content") if logprobs else None
         if not content:
             return cls._label_from_text(raw), None
 
         if reasoning:
-            final_idx = -1
+            # panel reasoning models close their thinking trace with different
+            # delimiters: Qwen/R1 `</think>`, Mistral Magistral `[/THINK]`,
+            # NVIDIA Nemotron `</think>` or channel markers; some just reason in
+            # prose. Take the LAST end-of-thinking marker (or `FINAL:`) and scan
+            # forward for the first committed verdict digit; if there is no
+            # marker, the verdict is simply the last committed digit.
+            marker_idx = -1
             for i, t in enumerate(content):
-                if _norm(t["token"]).startswith("final"):
-                    final_idx = i
-            if final_idx >= 0:
-                score = cls._pick_score(content[final_idx + 1:])
-            else:  # no FINAL marker -> take the last committed digit, if any
-                score = cls._pick_score(reversed(content))
+                tok = _norm(t["token"])
+                is_think_end = (("think" in tok and (">" in tok or "]" in tok))
+                                or "channel" in tok or tok.startswith("final"))
+                if is_think_end:
+                    marker_idx = i
+            if marker_idx >= 0:
+                score = cls._pick_score(content[marker_idx + 1:])
+            else:  # no marker -> the final answer is the last committed digit
+                score = cls._pick_score(list(reversed(content)))
         else:
             # direct strategies emit the verdict up front; for schema-forced
             # JSON the digit sits a few tokens in ({"vulnerable": <digit>).
