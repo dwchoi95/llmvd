@@ -2,11 +2,12 @@
 
 The study's dataset is built in four stages (`Dataset.build()` runs them all):
 
-  1. load_pairs         — from each ReposVul record, take the vulnerable
-                          (before-patch) target function and its patched
-                          (after) twin as a (vul, non-vul) pair, per changed
-                          file. Complexity tags (SFSF/MFSF/MFMF) derive from
-                          how many functions/files the patch touched.
+  1. load_pairs         — from each ReposVul record, take every target=1
+                          (before-patch) function and its SAME-NAME, changed
+                          after-version as a (vul, non-vul) pair, in files
+                          ReposVul marks vulnerable (target=1). Complexity
+                          tags (SFSF/MFSF/MFMF) derive from how many target
+                          functions/vulnerable files the fix spans.
   2. CallGraph.collect  — real call-graph extraction around the target
                           function at the exact commit (see callgraph.py;
                           parsing lives in treesitter.py).
@@ -38,6 +39,7 @@ Outputs:
 Usage:
     ./env/bin/python -m src.utils.dataset          # data/ReposVul.jsonl -> test + example
     ./env/bin/python -m src.utils.dataset --build-sft data/FuncFileRepo.train.jsonl
+    ./env/bin/python -m src.utils.dataset --validate data/FuncFileRepo.test.jsonl
 """
 from __future__ import annotations
 
@@ -45,10 +47,13 @@ import re
 import json
 import argparse
 import collections
+import difflib
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from .callgraph import CallGraph, LANG_NORM
+from .treesitter import TreeSitter
 
 # panel served with a common 128K context (min native ctx across the panel)
 MAX_MODEL_LEN = 131072
@@ -109,15 +114,48 @@ class Dataset:
         return fs
 
     @staticmethod
-    def _choose_primary(functions: List[Dict[str, Any]]) -> Tuple[int, Dict[str, Any]]:
-        # prefer the first target=1 function, else the longest one
-        for i, f in enumerate(functions):
-            if f.get("target", 0) == 1:
-                return i, f
-        if not functions:
-            return -1, {}
-        idx = max(range(len(functions)), key=lambda i: len(functions[i].get("function", "")))
-        return idx, functions[idx]
+    def _norm(code: str) -> str:
+        return "".join(code.split())
+
+    @staticmethod
+    def _primary_name(code: str, language: str) -> str | None:
+        """Name of the outermost definition in a snippet (the class name for a
+        Python/Java class snippet, whose methods like __init__ are not unique)."""
+        lang_key = LANG_NORM.get(language)
+        cls_re = {"python": r"\s*(?:@[^\n]*\n\s*)*class\s+(\w+)",
+                  "java": r"\s*(?:@[\w.]+(?:\([^)]*\))?\s*)*(?:(?:public|protected|private"
+                          r"|abstract|final|static|strictfp)\s+)*(?:class|interface|enum)\s+(\w+)"}
+        m = re.match(cls_re[lang_key], code) if lang_key in cls_re else None
+        if m:
+            return m.group(1)
+        data = code.encode()
+        try:
+            defs, _ = TreeSitter.extract_defs(data, lang_key)
+            if not defs and lang_key == "java":   # bare method: wrap in a class
+                defs, _ = TreeSitter.extract_defs(b"class _W{\n" + data + b"\n}", lang_key)
+        except Exception:
+            return None
+        return min(defs, key=lambda d: TreeSitter.start_byte(d[1]))[0] if defs else None
+
+    @classmethod
+    def _target_pairs(cls, detail: Dict[str, Any], language: str):
+        """[(before, after)] for every target=1 function whose SAME-NAME
+        after-version differs beyond whitespace. Pairing by name, not list
+        position: function_after is not aligned with function_before, and an
+        unchanged twin is not a patched pair."""
+        fa = [(cls._primary_name(f["function"], language), f)
+              for f in cls._collect_functions(detail, "function_after")]
+        out = []
+        for b in cls._collect_functions(detail, "function_before"):
+            if int(b["target"]) != 1:
+                continue
+            name = cls._primary_name(b["function"], language)
+            changed = [a for n, a in fa if name and n == name
+                       and cls._norm(a["function"]) != cls._norm(b["function"])]
+            if changed:
+                out.append((b, max(changed, key=lambda a: difflib.SequenceMatcher(
+                    None, b["function"], a["function"]).ratio())))
+        return out
 
     def load_pairs(self) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
         """One (vul, non-vul) pair per valid changed file of each ReposVul
@@ -135,13 +173,18 @@ class Dataset:
                 language = (row.get("cve_language") or "").lower()
                 parents = row.get("parents") or []
                 commit_before = parents[-1]["commit_id_before"] if parents else None
+                # only files ReposVul marks vulnerable (target=1); other
+                # changed files (tests, docs, refactors) carry no
+                # function-level vulnerability label
                 details = [d for d in (row.get("details") or [])
-                           if self._valid_detail_language(d, language)]
+                           if self._valid_detail_language(d, language)
+                           and d.get("target") == 1]
                 if not details or not commit_before:
                     continue
 
-                # complexity tag from how many functions/files the patch touched
-                n_funcs = sum(len(d.get("function_before") or []) for d in details)
+                # complexity tag from how many target functions/files the fix spans
+                n_funcs = sum(int(f["target"]) == 1 for d in details
+                              for f in self._collect_functions(d, "function_before"))
                 multi_func = n_funcs > 1
                 multi_file = len(details) > 1
                 tag = ("MFMF" if multi_file else "MFSF") if multi_func else "SFSF"
@@ -155,25 +198,21 @@ class Dataset:
                     "tag": tag,
                 }
                 for d in details:
-                    fb = self._collect_functions(d, "function_before")
-                    fa = self._collect_functions(d, "function_after")
-                    idx_b, prim_before = self._choose_primary(fb)
-                    prim_after = fa[idx_b] if 0 <= idx_b < len(fa) else (fa[0] if fa else {})
-                    if not (prim_before and d.get("code_before")
-                            and prim_after and d.get("code")):
+                    if not (d.get("code_before") and d.get("code")):
                         continue
-                    empty = {"callee": [], "caller": []}
-                    vul = {**meta, "commit_id": commit_before,
-                           "file_name": d.get("file_name"),
-                           "function": prim_before["function"],
-                           "file": d["code_before"],
-                           "repository": dict(empty), "vulnerable": True}
-                    nonvul = {**meta, "commit_id": row.get("commit_id"),
-                              "file_name": d.get("file_name"),
-                              "function": prim_after["function"],
-                              "file": d["code"],
-                              "repository": dict(empty), "vulnerable": False}
-                    pairs.append((vul, nonvul))
+                    for prim_before, prim_after in self._target_pairs(d, language):
+                        empty = {"callee": [], "caller": []}
+                        vul = {**meta, "commit_id": commit_before,
+                               "file_name": d.get("file_name"),
+                               "function": prim_before["function"],
+                               "file": d["code_before"],
+                               "repository": dict(empty), "vulnerable": True}
+                        nonvul = {**meta, "commit_id": row.get("commit_id"),
+                                  "file_name": d.get("file_name"),
+                                  "function": prim_after["function"],
+                                  "file": d["code"],
+                                  "repository": dict(empty), "vulnerable": False}
+                        pairs.append((vul, nonvul))
         # deterministic order + dedup identical pairs
         seen = set()
         out = []
@@ -186,6 +225,11 @@ class Dataset:
                 continue
             seen.add(sig)
             out.append((v, n))
+        # a patched version that is the vulnerable version of another CVE
+        # (successive fixes of one function) is not a safe sample: keeping it
+        # would give the same code both labels
+        vul_texts = {self._norm(v["function"]) for v, _ in out}
+        out = [(v, n) for v, n in out if self._norm(n["function"]) not in vul_texts]
         print(f"[load_pairs] {len(out)} (vul, non-vul) pairs")
         return out
 
@@ -388,6 +432,48 @@ class Dataset:
         self.build_examples(test_rows, all_pairs, self.example_path)
 
     # ------------------------------------------------------------------ #
+    # Validate a built split against ReposVul: keep a pair only if its patched
+    # member is the same-name, changed after-version of a target function.
+    # Row ids are kept.
+    # ------------------------------------------------------------------ #
+    def validate_pairs(self, in_path: str, out_path: str) -> None:
+        rows = [json.loads(l) for l in open(in_path, encoding="utf-8")]
+        pairs = list(zip(rows[0::2], rows[1::2]))
+        assert all(v["vulnerable"] and not n["vulnerable"] for v, n in pairs)
+        want = {(v["project"], n["commit_id"], v["cve_id"]) for v, n in pairs}
+        index = {}
+        with open(self.input_path, encoding="utf-8") as fin:
+            for line in fin:
+                r = json.loads(line)
+                k = (r.get("project"), r.get("commit_id"), r.get("cve_id"))
+                if k in want:
+                    index[k] = r
+        kept, dropped = [], collections.defaultdict(list)
+        for v, n in pairs:
+            lang = v["language"]
+            details = [d for d in (index.get((v["project"], n["commit_id"], v["cve_id"]), {})
+                                   .get("details") or [])
+                       if d.get("target") == 1 and d.get("code_before") == v["file"]]
+            targets = {self._primary_name(f["function"], lang) for d in details
+                       for f in self._collect_functions(d, "function_before")
+                       if int(f["target"]) == 1}
+            name = self._primary_name(v["function"], lang)
+            if not name or name not in targets:
+                dropped["vul_not_target"].append(v["id"])
+            elif self._primary_name(n["function"], lang) != name:
+                dropped["mispaired"].append(v["id"])
+            elif self._norm(v["function"]) == self._norm(n["function"]):
+                dropped["no_change"].append(v["id"])
+            else:
+                kept += [v, n]
+        with open(out_path, "w", encoding="utf-8") as fout:
+            for r in kept:
+                fout.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"[validate_pairs] kept {len(kept) // 2}/{len(pairs)} pairs -> {out_path}")
+        for why, ids in dropped.items():
+            print(f"[validate_pairs] dropped {len(ids)} {why}: {ids}")
+
+    # ------------------------------------------------------------------ #
     # SFT training corpus: same schema as the test set, but CVE-DISJOINT
     # from it, and NO pair-completeness / 128K requirement — every row whose
     # call graph resolves is a usable training example on its own.
@@ -406,7 +492,9 @@ class Dataset:
         # resume: skip rows already written (keyed by the same triple the
         # detector resumes on), so an interrupted overnight run continues
         def rkey(r):
-            return f"{r.get('project')}|{r.get('commit_id')}|{r.get('file_name')}|{r.get('vulnerable')}"
+            # function hash: one file can yield several target pairs
+            return (f"{r.get('project')}|{r.get('commit_id')}|{r.get('file_name')}|"
+                    f"{r.get('vulnerable')}|{hashlib.sha1(r['function'].encode()).hexdigest()}")
         done = {}
         if resume and Path(train_path).exists():
             for l in open(train_path, encoding="utf-8"):
@@ -547,6 +635,10 @@ def main():
                          "from an existing training split into --sft-out "
                          "(no call-graph work)")
     ap.add_argument("--sft-out", default="data/FuncFileRepo.sft.jsonl")
+    ap.add_argument("--validate", default=None, metavar="SPLIT_JSONL",
+                    help="re-validate a built split against --input and write "
+                         "only correctly paired rows (ids kept) to --validate-out")
+    ap.add_argument("--validate-out", default="data/FuncFileRepo.test.valid.jsonl")
     args = ap.parse_args()
     if args.build_sft:
         Path(args.sft_out).parent.mkdir(parents=True, exist_ok=True)
@@ -554,7 +646,9 @@ def main():
         return
     ds = Dataset(args.input, args.output, example_path=args.examples,
                  budget=args.budget)
-    if args.build_train:
+    if args.validate:
+        ds.validate_pairs(args.validate, args.validate_out)
+    elif args.build_train:
         ds.build_train(args.build_train, args.train_out)
     elif args.examples_for:
         ds.build_examples_for(args.examples_for)

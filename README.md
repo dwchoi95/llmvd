@@ -34,6 +34,30 @@ tar xzf models.tar.gz      # -> models/
 
 ---
 
+## Reproducing the paper
+
+```bash
+# all paper tables, the RQ3 figures, and in-text numbers from the saved runs
+python -m src.analysis.paper_tables          # -> paper/tables, paper/figures, paper/paper_numbers.json
+python -m src.analysis.sft_truncation        # SFT input-length table (needs the base tokenizers)
+```
+
+`expr.ipynb` contains the same metric code cell by cell.
+
+### SFT adapters
+
+One LoRA adapter per base checkpoint (rank 16, alpha 32, dropout 0.05, one epoch, lr 2e-4, effective batch 16, max length 4,096); the two Nemotron modes share one adapter:
+
+```bash
+python -m src.core.sft -m Qwen/Qwen3-30B-A3B-Instruct-2507 -d data/FuncFileRepo.train.jsonl -o models/Qwen3_30B_A3B_Instruct_2507
+python -m src.core.sft -m nvidia/NVIDIA-Nemotron-Nano-12B-v2 -d data/FuncFileRepo.train.jsonl -o models/NVIDIA_Nemotron_Nano_12B_v2 \
+    --control-token /no_think --trust-remote-code
+```
+
+Serve a base model with its adapter (`vllm serve <repo> --enable-lora --lora-modules <model>-sft=<adapter dir> --max-lora-rank 32 --max-model-len 131072`) and evaluate with `run.py -p sft -m <model>-sft`.
+
+---
+
 ## Running the experiment
 
 Every run evaluates one served model on all three scopes for the given strategies, resuming automatically (rows already scored are skipped; use `-r` to recompute).
