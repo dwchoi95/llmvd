@@ -1,4 +1,4 @@
-"""ReposVul.jsonl -> FuncFileRepo.final.jsonl.
+"""ReposVul.jsonl -> FuncFileRepo.test.jsonl.
 
 The study's dataset is built in four stages (`Dataset.build()` runs them all):
 
@@ -32,7 +32,7 @@ The study's dataset is built in four stages (`Dataset.build()` runs them all):
                           device, immaterial for teaching the verdict.
 
 Outputs:
-    data/FuncFileRepo.test.jsonl     — the evaluation set (960 rows)
+    data/FuncFileRepo.test.jsonl     — the evaluation set (848 rows)
     data/FuncFileRepo.example.jsonl  — RAG examples ({test_id, example,
                                        vulnerable}, 2 rows per test_id)
 
@@ -256,7 +256,7 @@ class Dataset:
         toks, budgets = {}, {}
         for name, hf in PANEL_TOKENIZERS.items():
             tok = AutoTokenizer.from_pretrained(hf)
-            sys_max = max(len(tok.encode(pm.render(file=s.system_file)))
+            sys_max = max(len(tok.encode(pm.render(file=f"src/prompts/{s.prompt_dir}/system.md")))
                           for s in STRATEGIES.values())
             toks[name] = tok
             budgets[name] = MAX_MODEL_LEN - GEN_RESERVE - sys_max - MARGIN
@@ -273,11 +273,11 @@ class Dataset:
                     for c in items:
                         info += f"#### File: {c.get('file')}\n```{language}\n{c.get('function')}\n```\n"
             return [
-                pm.render(file="src/prompts/detection/function.md",
+                pm.render(file="src/prompts/zero/function.md",
                           language=language, function=function),
-                pm.render(file="src/prompts/detection/file.md", language=language,
+                pm.render(file="src/prompts/zero/file.md", language=language,
                           function=function, file_code=r.get("file") or ""),
-                pm.render(file="src/prompts/detection/repository.md",
+                pm.render(file="src/prompts/zero/repository.md",
                           language=language, function=function, repository=info),
             ]
 

@@ -8,7 +8,7 @@ def main() -> None:
                         help="Path to the dataset JSONL file.")
     parser.add_argument("-s", "--savedir", default="results",
                         help="Directory where experiment results are stored.")
-    parser.add_argument("-m", "--model", default="llama3.1:8b",
+    parser.add_argument("-m", "--model", default="qwen3-30b-instruct",
                         help="Model identifier to use for the chosen LLM backend.")
     parser.add_argument("-t", "--temperature", type=float, default=None,
                         help="Sampling temperature. Default: None = use the "

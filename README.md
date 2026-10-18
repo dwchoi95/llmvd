@@ -1,9 +1,6 @@
 # How Much Context Is Enough? A Comparative Study of Input Scope of Code and Prompting in LLM-Based Vulnerability Detection
 
-<div align="center">
-  <img src="./overview.png" alt="overview"
-       style="width:clamp(320px, 50%, 900px); height:auto; display:block;" />
-</div>
+Artifact of the APSEC 2026 paper. It evaluates 424 vulnerable/patched function pairs (848 functions in C, C++, Java, and Python, built from [ReposVul](https://github.com/Eshe0922/ReposVul)) at three input scopes (the target function, its whole file, and its direct callers/callees), crossed with three prompting strategies (zero-shot, RAG, SFT), on six open-weight models forming three non-reasoning/reasoning pairs. The SFT training split has 476 functions (238 pairs) and shares no CVE with the evaluation set.
 
 ## Installation
 
@@ -13,6 +10,8 @@ Requires **Python ≥ 3.12** (developed on Ubuntu 22.04).
 python -m venv env
 source env/bin/activate
 pip install -r requirements.txt
+pip install --no-deps codebleu==0.7.0   # pins tree-sitter<0.23 but runs on the grammars in requirements.txt
+cp .env.example .env                   # LOCAL_API_URL: base URL of the vLLM server (without /v1)
 ```
 
 ## Setup
@@ -62,13 +61,28 @@ Serve a base model with its adapter (`vllm serve <repo> --enable-lora --lora-mod
 
 Every run evaluates one served model on all three scopes for the given strategies, resuming automatically (rows already scored are skipped; use `-r` to recompute).
 
-```bash
-# Local open-weight model (serve it with vLLM first, then point LOCAL_API_URL at it)
-python run.py -d data/FuncFileRepo.test.jsonl -m qwen3-30b-instruct -s results -l 32 -e 3 -p zero,rag
+Serve each model with vLLM 0.20.2 under the served name below, then run it (`LOCAL_API_URL` in `.env` points at the server):
 
-# Reasoning model (emits a thinking trace before the verdict)
-python run.py -d data/FuncFileRepo.test.jsonl -m qwen3-30b-thinking --reasoning -l 24 -e 3 -p zero,rag
+```bash
+vllm serve <checkpoint> --served-model-name <served name> --dtype bfloat16 --max-model-len 131072 \
+    --generation-config auto --max-logprobs 20 \
+    --structured-outputs-config '{"backend": "xgrammar", "disable_any_whitespace": true}'
+# add --trust-remote-code for Nemotron, and --limit-mm-per-prompt '{"image":0}' for Mistral/Magistral
+
+python run.py -m qwen3-30b-instruct -l 32 -e 3 -p zero,rag
+python run.py -m qwen3-30b-thinking --reasoning -l 24 -e 3 -p zero,rag
 ```
+
+| Results label (`results/<label>`) | Served name (`-m`) | Checkpoint | Extra flags | `-l` |
+| --- | --- | --- | --- | --- |
+| `qwen3-30b-instruct` | `qwen3-30b-instruct` | `Qwen/Qwen3-30B-A3B-Instruct-2507` | | 32 |
+| `qwen3-30b-thinking` | `qwen3-30b-thinking` | `Qwen/Qwen3-30B-A3B-Thinking-2507` | `--reasoning` | 24 |
+| `mistral-small:24b` | `mistral-small:24b` | `mistralai/Mistral-Small-3.2-24B-Instruct-2506` | | 32 |
+| `magistral-small:24b` | `magistral-small:24b` | `mistralai/Magistral-Small-2509` | `--reasoning` | 24 |
+| `nemotron-nano:12b` | `nemotron-nano:12b` | `nvidia/NVIDIA-Nemotron-Nano-12B-v2` | `--control-token /no_think` | 24 |
+| `nemotron-nano-think:12b` | `nemotron-nano:12b` | same server as above | `--control-token /think --reasoning --label nemotron-nano-think:12b` | 24 |
+
+For SFT, serve the base checkpoint with its adapter as `<served name>-sft` and keep the base label, e.g. `python run.py -m nemotron-nano:12b-sft --label nemotron-nano:12b --control-token /no_think -p sft -e 3`. The analysis (`src.analysis.paper_tables`) reads `results/<label>/{zero,rag,sft}/`.
 
 ### Options
 
@@ -76,7 +90,7 @@ python run.py -d data/FuncFileRepo.test.jsonl -m qwen3-30b-thinking --reasoning 
 | ----- | ----------------- | -------------------------------- | ----------- |
 | `-d`  | `--dataset`       | `data/FuncFileRepo.test.jsonl`   | Dataset JSONL (one sample per line). |
 | `-s`  | `--savedir`       | `results`                        | Root directory for saved runs. |
-| `-m`  | `--model`         | `llama3.1:8b`                    | Model id (selects the backend by prefix). |
+| `-m`  | `--model`         | `qwen3-30b-instruct`             | Model id (selects the backend by prefix). |
 | `-t`  | `--temperature`   | `None`                           | If unset, the served model's own default applies. |
 | `-l`  | `--limit`         | `32`                             | Async concurrency (in-flight requests). |
 | `-e`  | `--executions`    | `1`                              | Trials per condition (repeat to average run-to-run noise). |
@@ -88,5 +102,17 @@ python run.py -d data/FuncFileRepo.test.jsonl -m qwen3-30b-thinking --reasoning 
 |       | `--label`         | `None`                           | Sub-directory label for this run's results. |
 
 Results are written to `results/{model}/{strategy}/{bench}_{trial}.jsonl` (slim 9-column schema: `id, language, scope, prompts, complexity, label, predict, tokens, time(s)`), and aggregated metrics to `results/{model}/result.csv`.
+
+## Rebuilding the dataset
+
+`data/` is the reference dataset used in the paper. `src.utils.dataset` documents how it was built from ReposVul (pairing, exact-commit call-graph extraction, 128K budget filter); rebuilding needs `data/ReposVul.jsonl` from the ReposVul release, GNU cflow 1.7 under `tools/cflow-1.7` (C/C++), and PyCG (Python):
+
+```bash
+python -m src.utils.dataset -i data/ReposVul.jsonl -o data/FuncFileRepo.test.jsonl
+```
+
+## License
+
+MIT (see `LICENSE`).
 
 ---

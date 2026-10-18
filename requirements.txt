@@ -10,8 +10,14 @@ httpx==0.28.1
 pydantic==2.12.4
 python-dotenv==1.2.1
 
-# Dataset construction (src/utils/): call-graph extraction + CodeBLEU ranking
-codebleu==0.7.0
+# Dataset construction (src/utils/) and repository-scope CodeBLEU ranking (src/core/detector.py).
+# codebleu==0.7.0 pins tree-sitter<0.23 but runs on these grammars; install it separately:
+#   pip install --no-deps codebleu==0.7.0
+tree-sitter==0.26.0
+tree-sitter-c==0.24.2
+tree-sitter-cpp==0.23.4
+tree-sitter-java==0.23.5
+tree-sitter-python==0.25.0
 tree-sitter-language-pack==1.12.5
 
 # Token counting per model family (src/core/evaluator.py)
@@ -25,7 +31,7 @@ scipy==1.16.3
 scikit-learn==1.7.2
 statsmodels==0.14.5
 matplotlib==3.10.7
-prettytable==3.16.0
+prettytable==3.18.0
 tqdm==4.67.1
 
 # Notebook that computes the paper's tables and figures (expr.ipynb)
