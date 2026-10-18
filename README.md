@@ -20,7 +20,7 @@ pip install -r requirements.txt
 The datasets and saved runs are shipped as compressed archives in the repository; extract them in place:
 
 ```bash
-tar xzf data.tar.gz        # -> data/     (evaluation, training, and RAG-demonstration JSONL)
+tar xzf data.tar.gz        # -> data/     (evaluation, training, RAG-demonstration, and input-length statistics JSONL)
 tar xzf results.tar.gz     # -> results/  (saved runs for every model, used by expr.ipynb)
 ```
 
