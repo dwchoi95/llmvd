@@ -27,7 +27,8 @@ The SFT LoRA adapters (~1 GB of safetensors) do not compress and are hosted on G
 
 ```bash
 pip install gdown
-gdown 1WAfmGDkf6wQ5X6hvAEhhr012gnhqyBm_ -O models.tar.gz
+gdown 1G9xSUHUfjpj8M5pCSLBIRqpTIx6Mv2H2 -O models.tar.gz   # https://drive.google.com/file/d/1G9xSUHUfjpj8M5pCSLBIRqpTIx6Mv2H2
+shasum -a 256 models.tar.gz   # 6041d82e72772398b734bd39b99ccc019a6017be05c1cb14d19314bcd382b4f6
 tar xzf models.tar.gz      # -> models/
 ```
 
