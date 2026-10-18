@@ -154,6 +154,8 @@ class Detector:
     # ------------------------------------------------------------------ #
     MAX_MODEL_LEN = 131072
     GEN_RESERVE = 1024 + 256   # must match src/utils/dataset.py budget
+    RETRIES = 5                # re-issues of a call without a parsable verdict
+    RETRY_SHRINK = 0.95        # budget factor per retry for a truncated prompt
 
     def _user_budget(self) -> int:
         budget = getattr(self, "_user_budget_cache", None)
@@ -181,7 +183,7 @@ class Detector:
     def _render(self, strategy, scope, **kw) -> str:
         return self.pm.render(file=self._tpl(strategy.prompt_dir, scope), **kw)
 
-    def _make_user_prompt(self, row: pd.Series, scope: str, strategy):
+    def _make_user_prompt(self, row: pd.Series, scope: str, strategy, scale: float = 1.0):
         """Render the user prompt for one (row, scope, strategy); returns
         (prompt, truncated). Deterministic given the row.
 
@@ -191,7 +193,7 @@ class Detector:
         """
         function = row["function"]
         language = row["language"]
-        budget = self._user_budget()
+        budget = int(self._user_budget() * scale)
         truncated = False
 
         base_kw = dict(language=language, function=function)
@@ -200,10 +202,12 @@ class Detector:
             base_kw["vul_example"] = ex.get("vul", "")
             base_kw["sec_example"] = ex.get("sec", "")
 
+        skw: dict = {}
         if scope == "function":
             user = self._render(strategy, "function", **base_kw)
         elif scope == "file":
             file_code = row["file"]
+            skw = dict(file_code=file_code)
             user = self._render(strategy, "file", file_code=file_code, **base_kw)
             if self.evaluator.token_count(user) > budget:
                 truncated = True
@@ -217,16 +221,14 @@ class Detector:
                         lo = mid
                     else:
                         hi = mid - 1
-                user = self._render(strategy, "file",
-                                    file_code=file_code[:lo] + self._TRUNC_MARK,
-                                    **base_kw)
+                skw = dict(file_code=file_code[:lo] + self._TRUNC_MARK)
+                user = self._render(strategy, "file", **skw, **base_kw)
         elif scope == "repository":
             repo = row.get("repository", {"callee": [], "caller": []})
             callees = self.priority(function, repo.get("callee") or [], language)
             callers = self.priority(function, repo.get("caller") or [], language)
-            user = self._render(strategy, "repository",
-                                repository=self._repo_info(language, callees, callers),
-                                **base_kw)
+            skw = dict(repository=self._repo_info(language, callees, callers))
+            user = self._render(strategy, "repository", **skw, **base_kw)
             while (self.evaluator.token_count(user) > budget
                    and (callees or callers)):
                 truncated = True
@@ -234,9 +236,25 @@ class Detector:
                     callers = callers[:-1]
                 else:
                     callees = callees[:-1]
-                user = self._render(strategy, "repository",
-                                    repository=self._repo_info(language, callees, callers),
-                                    **base_kw)
+                skw = dict(repository=self._repo_info(language, callees, callers))
+                user = self._render(strategy, "repository", **skw, **base_kw)
+        # long retrieved examples can exceed the budget on their own: keep the
+        # beginning of both examples, cut by the same fraction
+        if strategy.uses_examples and self.evaluator.token_count(user) > budget:
+            truncated = True
+            vul, sec = base_kw["vul_example"], base_kw["sec_example"]
+            def cut(k):  # keep k/1000 of each example
+                kw = dict(base_kw, vul_example=vul[:len(vul) * k // 1000] + self._TRUNC_MARK,
+                          sec_example=sec[:len(sec) * k // 1000] + self._TRUNC_MARK)
+                return self._render(strategy, scope, **skw, **kw)
+            lo, hi = 0, 1000
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if self.evaluator.token_count(cut(mid)) <= budget:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            user = cut(lo)
         return user, truncated
 
     # ------------------------------------------------------------------ #
@@ -262,17 +280,27 @@ class Detector:
         # keep it off the event loop so it can't stall in-flight requests
         user, truncated = await asyncio.to_thread(
             self._make_user_prompt, row, scope, strategy)
-        start = perf_counter()
-        if self.__scored:
-            # reasoning models decode free-form (no schema) with a larger budget
-            mt = 4096 if self.reasoning else self.max_tokens
-            label, score, raw = await self.model.run_scored(
-                system, user, max_tokens=mt,
-                reasoning=self.reasoning)
-            predict = self._typed(raw)
-        else:
-            label = await self.model.run(system, user)
-            predict = bool(label) if label is not None else None
+        # a call without a parsable verdict is re-issued with a smaller budget,
+        # since the server may count more tokens than the client-side estimate
+        # (or reserve more for a reasoning budget); a prompt under the reduced
+        # budget is re-sent unchanged
+        for attempt in range(self.RETRIES + 1):
+            if attempt:
+                user, _ = await asyncio.to_thread(
+                    self._make_user_prompt, row, scope, strategy, self.RETRY_SHRINK ** attempt)
+            start = perf_counter()
+            if self.__scored:
+                # reasoning models decode free-form (no schema) with a larger budget
+                mt = 4096 if self.reasoning else self.max_tokens
+                label, score, raw = await self.model.run_scored(
+                    system, user, max_tokens=mt,
+                    reasoning=self.reasoning)
+                predict = self._typed(raw)
+            else:
+                label = await self.model.run(system, user)
+                predict = bool(label) if label is not None else None
+            if predict is not None:
+                break
         duration = perf_counter() - start
         # slim per-row record — matches results/{model}/{strategy}/*.jsonl
         slim = {
