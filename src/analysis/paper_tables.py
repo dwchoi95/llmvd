@@ -2,7 +2,7 @@
 
 Reads data/FuncFileRepo.test.jsonl and results/{model}/{strategy}/*.jsonl and
 reuses the metric and plotting code of expr.ipynb (cells 1, 2, 7-10).
-Writes <out>/tables/*.tex, <out>/figures/results_{equivalence,rq3cwe,rq3lang}.pdf, and
+Writes <out>/tables/*.tex, <out>/figures/results_{equivalence,cost,rq3cwe,rq3lang}.pdf, and
 <out>/paper_numbers.json.
 
     python -m src.analysis.paper_tables [--out paper]
@@ -294,14 +294,34 @@ table("sft_predictions.tex", r"SFT prediction distributions",
 
 # ---- tokens / response time ------------------------------------------------ #
 eff = df.groupby(["prompts", "scope"])[["tokens", "time(s)"]].mean()
-table("tokens.tex", "Mean estimated prompt tokens by prompting strategy and input scope", "tab:tokens", "l||rrr",
-      head2("Strategy", [("Input scope", ["Function", "File", "Repository"])]),
-      [[n] + [f"{eff.loc[(s, sc), 'tokens']:,.0f}" for sc in SCOPES] for s, n in [("zero", "Zero-shot"), ("rag", "RAG"), ("sft", "SFT")]])
 df["reasoning"] = df.model.isin(REASONING)
 rt = df.groupby(["reasoning", "prompts", "scope"])["time(s)"].mean().groupby(["reasoning", "prompts"]).mean()
-table("response_time.tex", "Mean response time per request by model group and prompting strategy",
-      "tab:responsetime", "l||rrr", head2("Model group", [("Response time (s)", ["Zero-shot", "RAG", "SFT"])]),
-      [["Reasoning" if r else "Non-reasoning"] + [f"{rt.loc[(r, s)]:.1f}" for s in STRATS] for r in (False, True)])
+# every (model group, strategy, scope) cell on the token-time plane, unpooled; lines join the three scopes
+cost = df.groupby(["reasoning", "prompts", "scope"])[["tokens", "time(s)"]].mean()
+from matplotlib.lines import Line2D
+with plt.rc_context({"font.family": "serif", "font.serif": ["Times New Roman", "STIXGeneral"], "mathtext.fontset": "stix",
+                     "font.size": 8, "xtick.labelsize": 7, "ytick.labelsize": 7, "pdf.fonttype": 42}):
+    fig, ax = plt.subplots(figsize=(3.3, 2.0))
+    SC = ["function", "repository", "file"]   # left to right
+    MK = {"zero": ("o", "-"), "rag": ("s", "--"), "sft": ("^", ":")}
+    for r, fc in [(False, "w"), (True, "k")]:
+        for s_, (mk, ls) in MK.items():
+            xs = [cost.loc[(r, s_, sc), "tokens"] for sc in SC]; ys = [cost.loc[(r, s_, sc), "time(s)"] for sc in SC]
+            ax.plot(xs, ys, ls=ls, color="0.45", lw=.8, zorder=1)
+            ax.plot(xs, ys, mk, ls="", ms=4.5, mfc=fc, mec="k", mew=.8, zorder=2)
+    from matplotlib.patches import Patch
+    st = [Line2D([], [], marker=MK[s_][0], ls=MK[s_][1], color="0.45", mfc="w", mec="k") for s_ in MK]
+    gr = [Patch(fc=fc, ec="k", lw=.8) for fc in ("w", "k")] + [Line2D([], [], ls="")]
+    # column-major fill: first row strategies, second row model groups
+    ax.legend([x for pair in zip(st, gr) for x in pair], [x for pair in zip(["Zero-shot", "RAG", "SFT"], ["Non-reasoning", "Reasoning", ""]) for x in pair],
+              loc="center left", bbox_to_anchor=(0, .58), fontsize=6.5, frameon=False, ncol=3, handlelength=2.2, columnspacing=1)
+    ax.set_xlim(0, 24000); ax.set_xticks(range(0, 24001, 3000)); ax.set_xticklabels([f"{k}K" if k else "0" for k in range(0, 25, 3)])
+    ax.set_ylim(0, 60); ax.set_xlabel("Mean estimated prompt tokens"); ax.set_ylabel("Mean response time (s)")
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    fig.savefig(FIGS / "results_cost.pdf", bbox_inches="tight"); plt.close(fig)
+NUM["cost_cells"] = {f"{'reason' if r else 'direct'}|{s_}|{sc}": dict(tokens=float(cost.loc[(r, s_, sc), "tokens"]), time=float(cost.loc[(r, s_, sc), "time(s)"]))
+                     for r in (False, True) for s_ in STRATS for sc in SCOPES}
 NUM["tokens"] = {f"{s}|{sc}": float(eff.loc[(s, sc), "tokens"]) for s in STRATS for sc in SCOPES}
 NUM["response_time"] = {f"{'reason' if r else 'direct'}|{s}": float(rt.loc[(r, s)]) for r in (False, True) for s in STRATS}
 
