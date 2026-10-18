@@ -14,9 +14,7 @@ therefore matches evaluation input token-for-token.
       -d data/FuncFileRepo.train.jsonl \
       -o adapters/qwen3-30b-instruct
 
-Two correctness choices that distinguish this from a naive digit-classifier
-fine-tune, both learned the hard way (see the overfit diagnostics in the paper's
-threats-to-validity):
+Two choices distinguish this from a naive digit-classifier fine-tune:
 
   1. COMPLETION loss, not digit-only. We supervise the whole assistant turn
      `{"vulnerable": <d>}` + EOS. Masking everything but the single digit token

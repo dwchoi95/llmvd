@@ -250,7 +250,7 @@ class Detector:
     def _typed(cls, raw) -> "bool | None":
         if raw is None:
             return None
-        # take the LAST match: free-form (CoT) outputs end with the verdict,
+        # take the LAST match: free-form (reasoning) outputs end with the verdict,
         # and structured outputs contain exactly one match either way
         ms = list(cls._DIGIT.finditer(str(raw))) or list(cls._ANY01.finditer(str(raw)))
         return bool(int(ms[-1].group(1))) if ms else None
@@ -264,13 +264,11 @@ class Detector:
             self._make_user_prompt, row, scope, strategy)
         start = perf_counter()
         if self.__scored:
-            # free-form strategies (cot) need an in-channel scratchpad even on
-            # non-reasoning models: no schema forcing, reasoning-sized budget
-            free_form = self.reasoning or getattr(strategy, "free_form", False)
-            mt = 4096 if free_form else self.max_tokens
+            # reasoning models decode free-form (no schema) with a larger budget
+            mt = 4096 if self.reasoning else self.max_tokens
             label, score, raw = await self.model.run_scored(
                 system, user, max_tokens=mt,
-                reasoning=free_form)
+                reasoning=self.reasoning)
             predict = self._typed(raw)
         else:
             label = await self.model.run(system, user)

@@ -216,3 +216,6 @@ models/
 # models archive is hosted on Google Drive, not committed
 models.tar.gz
 
+# paper sources and local assistant notes are kept outside the artifact
+paper/
+CLAUDE.md

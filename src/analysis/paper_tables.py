@@ -2,7 +2,7 @@
 
 Reads data/FuncFileRepo.test.jsonl and results/{model}/{strategy}/*.jsonl and
 reuses the metric and plotting code of expr.ipynb (cells 1, 2, 7-10).
-Writes <out>/tables/*.tex, <out>/figures/results_rq3{cwe,lang}.pdf, and
+Writes <out>/tables/*.tex, <out>/figures/results_{equivalence,rq3cwe,rq3lang}.pdf, and
 <out>/paper_numbers.json.
 
     python -m src.analysis.paper_tables [--out paper]
@@ -101,25 +101,24 @@ NUM["dataset"] = dict(pairs=len(eval_rows) // 2, functions=len(eval_rows),
                       c=sum(r["language"] == "c" for r in eval_rows), cpp=sum(r["language"] == "c++" for r in eval_rows),
                       lang=dict(lang), tiers=dict(tiers))
 d = NUM["dataset"]
-stat = [("Projects", d["projects"]), ("Unique CVEs", d["cves"]), ("CWE labels", d["cwe_labels"]), None,
-        ("C/C++", lang["C/C++"]), ("Java", lang["Java"]), ("Python", lang["Python"])]
-samp = [("Total", d["functions"]), (r"\quad Vulnerable", d["pairs"]), (r"\quad Non-vulnerable", d["pairs"]), None,
-        (r"\quad SFSF", tiers["SFSF"]), (r"\quad MFSF", tiers["MFSF"]), (r"\quad MFMF", tiers["MFMF"])]
-def mini(title, rows):
-    lines = [r"  \begin{minipage}[t]{0.46\columnwidth}\centering", rf"  \textbf{{{title}}}\\[2pt]",
-             r"  \begin{tabular}{lc}", r"  \toprule"]
-    lines += [r"  \midrule" if x is None else f"  {x[0]} & {x[1]} \\\\" for x in rows]
-    return lines + [r"  \bottomrule", r"  \end{tabular}", r"  \end{minipage}"]
+folds = [[("Vulnerable", d["pairs"]), ("Non-vulnerable", d["pairs"])],
+         [(L, lang[L]) for L in ("C/C++", "Java", "Python")],
+         [(t, tiers[t]) for t in ("SFSF", "MFSF", "MFMF")]]
+height = max(map(len, folds))
+cellrow = lambda i: " & ".join(f"{f[i][0]} & {f[i][1]:,}" if i < len(f) else " & " for f in folds) + r" \\"
 (TABLES / "dataset_statistics.tex").write_text("\n".join([
     r"\begin{table}[h]", r"  \centering",
-    r"  \caption{Evaluation dataset statistics. CWE labels include \texttt{NVD-CWE-noinfo}.}",
-    r"  \label{tab:dataset_statistics}", r"  \small", r"  \begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}} c c @{}}",
-    *mini("Statistics", stat), "  &", *mini("Samples", samp), r"  \end{tabular*}", r"\end{table}", ""]))
+    rf"  \caption{{Statistics of the evaluation dataset ({d['pairs']:,} pairs from {d['projects']:,} projects and {d['cves']:,} CVEs)}}",
+    r"  \label{tab:dataset_statistics}", r"  \small", r"  \begin{tabular}{@{}lr||lr||lr@{}}", r"  \toprule",
+    r"  \textbf{Label} & \textbf{\#} & \textbf{Language} & \textbf{\#} & \textbf{Tier} & \textbf{\#} \\", r"  \midrule",
+    *[f"  {cellrow(i)}" for i in range(height)], r"  \midrule",
+    "  " + " & ".join(f"Total & {sum(n for _, n in f):,}" for f in folds) + r" \\",
+    r"  \bottomrule", r"  \end{tabular}", r"\end{table}", ""]))
 
 # ---- Tables IV, V, VI ----------------------------------------------------- #
-tab4 = grid_table("rq1_scope.tex", r"Detection results by input scope and patch-span tier (strategies and models pooled; trial means). Acc, Pre, Rec: accuracy, precision, recall. Bold: best scope per tier; P-V/P-B/P-R are unranked failure decompositions.",
+tab4 = grid_table("rq1_scope.tex", r"Detection results by input scope and complexity tier",
                   "tab:rq1", [("function", "Func"), ("file", "File"), ("repository", "Repo")], lambda g: df[df.scope == g], "3.0pt", "Scope")
-tab5 = grid_table("rq1_strategy.tex", r"Detection results by prompting strategy and patch-span tier (scopes and models pooled; trial means). Bold: best strategy per tier (SFT's P-C is offset by an equal P-R); other conventions as in Table~\ref{tab:rq1}.",
+tab5 = grid_table("rq1_strategy.tex", r"Detection results by prompting strategy and complexity tier",
                   "tab:rq1strat", [("zero", "Zero"), ("rag", "RAG"), ("sft", "SFT")], lambda g: df[df.prompts == g], "2.4pt", "Strategy")
 NAMES = ["Qwen3", r"Qwen3$^\dagger$", "Mistral", r"Magistral$^\dagger$", "Nemotron", r"Nemotron$^\dagger$"]
 mm = {m: trial_mean(zr[zr.model == m])[0] for m in MODELS}
@@ -129,7 +128,7 @@ lines = [f"    {n} & " + " & ".join(b[m]) + r" \\" for m, n in zip(MODELS, NAMES
 lines += [r"    \midrule"] + [rf"    \emph{{{g}}} & " + " & ".join(f3(mu[k]) for k in KP) + r" \\" for g, mu in grp.items()]
 (TABLES / "rq3_model.tex").write_text("\n".join([
     r"\begin{table}[h]", r"  \centering",
-    r"  \caption{Detection results by model (zero-shot and RAG pooled). Bold: best model per column; $\dagger$: reasoning variant; the last two rows pool the non-reasoning and reasoning groups; other conventions as in Table~\ref{tab:rq1}.}",
+    r"  \caption{Detection results by model with zero-shot prompting and RAG pooled}",
     r"  \label{tab:rq2}", r"  \small", r"  \setlength{\tabcolsep}{3.4pt}", r"  \begin{tabular}{@{}l *{8}{c}@{}}", r"    \toprule",
     r"    & \multicolumn{4}{c}{\emph{Classification}} & \multicolumn{4}{c}{\emph{Pair-wise}} \\",
     r"    \cmidrule(lr){2-5}\cmidrule(lr){6-9}",
@@ -140,13 +139,22 @@ NUM["tab5"] = {f"{g}|{t}": {k: round(v, 4) for k, v in tab5[(g, t)].items()} for
 NUM["tab6"] = {m: {k: round(v, 4) for k, v in mu.items()} for m, mu in {**mm, **grp}.items()}
 
 # ---- small-table helper (same layout as revision_tables.py) ------------- #
-def table(file, caption, label, columns, header, rows, note=""):
-    text = r"\begin{table}[t]" + "\n" + rf"\centering\caption{{{caption}}}\label{{{label}}}" + "\n"
+def table(file, caption, label, columns, header, rows):
+    """columns: tabular spec incl. || and |; header: LaTeX header row(s); a row "midrule" draws a group line."""
+    text = r"\begin{table}[h]" + "\n" + rf"\centering\caption{{{caption}}}\label{{{label}}}" + "\n"
     text += r"\small\setlength{\tabcolsep}{3pt}" + "\n" + rf"\begin{{tabular}}{{@{{}}{columns}@{{}}}}" + "\n\\toprule\n"
-    text += header + " \\\\\n\\midrule\n" + "\n".join(" & ".join(r) + r" \\" for r in rows) + "\n\\bottomrule\n\\end{tabular}\n"
-    if note:
-        text += "\\par\\smallskip\\begin{minipage}{\\linewidth}\\footnotesize " + note + "\\end{minipage}\n"
-    (TABLES / file).write_text(text + r"\end{table}" + "\n")
+    text += header + " \\\\\n\\midrule\n" + "\n".join(r"\midrule" if r == "midrule" else " & ".join(r) + r" \\" for r in rows)
+    (TABLES / file).write_text(text + "\n\\bottomrule\n\\end{tabular}\n" + r"\end{table}" + "\n")
+
+def head2(label, groups):
+    """2-level header: groups = [(group title, [sub-columns])]; the last group gets no right rule."""
+    n = sum(len(c) for _, c in groups)
+    top = " & ".join(rf"\multicolumn{{{len(c)}}}{{c{'|' if i < len(groups) - 1 else ''}}}{{\textbf{{{g}}}}}" if len(c) > 1
+                     else rf"\multicolumn{{1}}{{c{'|' if i < len(groups) - 1 else ''}}}{{\textbf{{{g}}}}}" for i, (g, c) in enumerate(groups))
+    sub = " & ".join(x for _, c in groups for x in c)
+    return (rf"\multirow{{2}}{{*}}{{\textbf{{{label}}}}} & {top} \\" + "\n" + rf"\cline{{2-{n + 1}}}" + "\n"
+            + rf"\rule{{0pt}}{{2.6ex}} & {sub}")
+fp = lambda p: "$<$.001" if p < .001 else f"{p:.3f}".replace("0.", ".", 1)
 
 # ---- RQ1 statistics (cell 4 / 6 logic) ----------------------------------- #
 MS = {(m, sc): trial_mean(zr[(zr.model == m) & (zr.scope == sc)])[0] for m in MODELS for sc in SCOPES}
@@ -177,24 +185,43 @@ for a, b2, nm in [("function", "file", r"Func.$\to$File"), ("function", "reposit
     eq.append((nm, .03, contrast([MS[(m, b2)]["PC"] - MS[(m, a)]["PC"] for m in MODELS], .03)))
 for a, b2, nm in [("zero", "rag", r"Zero$\to$RAG"), ("zero", "sft", r"Zero$\to$SFT"), ("rag", "sft", r"RAG$\to$SFT")]:
     eq.append((nm, .05, contrast([MT[(m, b2)]["PC"] - MT[(m, a)]["PC"] for m in MODELS], .05)))
-table("equivalence.tex", r"P-C equivalence sensitivity analysis over six model means. $\Delta$: mean paired difference (second minus first); raw $p_{\rm TOST}$; 90\% paired-$t$ intervals.",
-      "tab:equivalence", "lrrrr", r"Contrast & $\Delta$ & Margin & 90\% CI & $p_{\rm TOST}$",
-      [[nm, sg(r['delta'], 4), rf"$\pm${f3(mg)[:3]}", f"[{sg(r['lo'], 4)}, {sg(r['hi'], 4)}]", f"{r['p']:.4f}".replace("0.", ".", 1)] for nm, mg, r in eq],
-      r"Scope contrasts pool zero-shot/RAG; strategy contrasts pool scopes. Trials are averaged first. Equivalence at the stated margin applies to the panel-mean P-C, not to every model or to $D$.")
+# forest plot: mean paired difference, 90% CI, margin band; filled = equivalent at its margin
+import matplotlib.pyplot as plt
+from matplotlib.transforms import blended_transform_factory
+FIGS = OUTDIR / "figures"; FIGS.mkdir(parents=True, exist_ok=True)
+with plt.rc_context({"font.family": "serif", "font.serif": ["Times New Roman", "STIXGeneral"], "mathtext.fontset": "stix",
+                     "font.size": 8, "xtick.labelsize": 7, "ytick.labelsize": 8, "pdf.fonttype": 42}):
+    fig, ax = plt.subplots(figsize=(3.0, 1.85))
+    right = blended_transform_factory(ax.transAxes, ax.transData)
+    for i, (nm, mg, r) in enumerate(eq):
+        y = len(eq) - 1 - i
+        ax.fill_betweenx([y - .38, y + .38], -mg, mg, color="0.87", lw=0)
+        ax.plot([r["lo"], r["hi"]], [y, y], color="k", lw=1)
+        ax.plot(r["delta"], y, "o", ms=4, mec="k", mew=.9, mfc="k" if r["p"] < .05 else "w")
+        ax.text(1.03, y, fp(r["p"]), transform=right, va="center", fontsize=7)
+    ax.text(1.03, len(eq) - .45, r"$p_{\rm TOST}$", transform=right, va="bottom", fontsize=7)
+    ax.axvline(0, color="k", lw=.5, ls=":"); ax.axhline(2.5, color="0.6", lw=.5)
+    ax.set_yticks(range(len(eq))); ax.set_yticklabels([nm for nm, _, _ in eq][::-1])
+    ax.set_ylim(-.6, len(eq) - .4); ax.set_xlim(-.1, .11)
+    ax.set_xticks([-.1, -.05, 0, .05, .1]); ax.set_xticklabels(["$-$.10", "$-$.05", "0", ".05", ".10"])
+    ax.set_xlabel(r"P-C difference $\Delta$ (90% CI)")
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    fig.savefig(FIGS / "results_equivalence.pdf", bbox_inches="tight"); plt.close(fig)
 NUM["tost"] = {nm: r for nm, _, r in eq}
 
-table("model_contrasts.tex", "Per-model P-C changes. Scope contrasts pool zero-shot/RAG; RAG contrast pools scopes. Descriptive trial-mean differences.",
-      "tab:modelcontrasts", "lrrr", r"Model & Func.$\to$File & Func.$\to$Repo. & Zero$\to$RAG",
+table("model_contrasts.tex", "Per-model changes in P-C and signed separation $D$",
+      "tab:modelcontrasts", "l||rrr|r", head2("Model", [("P-C", [r"Func.$\to$File", r"Func.$\to$Repo.", r"Zero$\to$RAG"]), ("$D$", [r"Zero$\to$RAG"])]),
       [[n, sg(MS[(m, 'file')]['PC'] - MS[(m, 'function')]['PC']), sg(MS[(m, 'repository')]['PC'] - MS[(m, 'function')]['PC']),
-        sg(MT[(m, 'rag')]['PC'] - MT[(m, 'zero')]['PC'])] for m, n in zip(MODELS, NAMES)])
+        sg(MT[(m, 'rag')]['PC'] - MT[(m, 'zero')]['PC']), sg((MT[(m, 'rag')]['PC'] - MT[(m, 'rag')]['PR']) - (MT[(m, 'zero')]['PC'] - MT[(m, 'zero')]['PR']))] for m, n in zip(MODELS, NAMES)])
 NUM["model_contrasts"] = {m: dict(file=MS[(m, "file")]["PC"] - MS[(m, "function")]["PC"],
                                   repo=MS[(m, "repository")]["PC"] - MS[(m, "function")]["PC"],
-                                  rag=MT[(m, "rag")]["PC"] - MT[(m, "zero")]["PC"]) for m in MODELS}
+                                  rag=MT[(m, "rag")]["PC"] - MT[(m, "zero")]["PC"], rag_D=(MT[(m, "rag")]["PC"] - MT[(m, "rag")]["PR"]) - (MT[(m, "zero")]["PC"] - MT[(m, "zero")]["PR"])) for m in MODELS}
 
 # ---- reasoning gains: cell-6 cluster bootstrap, same seed ------------------ #
-def pair_outcomes(m):
+def pair_outcomes(m, strats=("zero", "rag"), scope=None):
     out = defaultdict(lambda: [0, 0, 0])   # [P-C, pairs, P-R]
-    sub = df[(df.model == m) & (df.prompts.isin(["zero", "rag"]))].dropna(subset=["predict"])
+    sub = df[(df.model == m) & (df.prompts.isin(strats)) & ((df.scope == scope) if scope else True)].dropna(subset=["predict"])
     for (t, s, sc, p), g in sub.groupby(["trial", "prompts", "scope", "pair"]):
         lab = dict(zip(g["label"].astype(bool), g["predict"].astype(bool)))
         if True in lab and False in lab:
@@ -217,15 +244,35 @@ for fam, (nr, re_) in {"Qwen": MODELS[0:2], "Mistral": MODELS[2:4], "Nemotron": 
     dpc = mm[re_]["PC"] - mm[nr]["PC"]
     dd = (mm[re_]["PC"] - mm[re_]["PR"]) - (mm[nr]["PC"] - mm[nr]["PR"])
     gains.append((fam, dpc, boot[49], boot[1949], dd, bootd[49], bootd[1949]))
-table("reasoning_gains.tex", r"Reasoning-variant minus non-reasoning P-C and signed separation $D$, pooling zero-shot/RAG and scopes, with 95\% intervals.",
-      "tab:reasoninggain", "lrrrr", r"Family & $\Delta$P-C & 95\% CI & $\Delta D$ & 95\% CI",
-      [[f, sg(d1), f"[{sg(lo)}, {sg(hi)}]", sg(d2), f"[{sg(dlo)}, {sg(dhi)}]"] for f, d1, lo, hi, d2, dlo, dhi in gains],
-      "Point estimates average trial rates. Intervals use a 2,000-draw pair-cluster bootstrap (seed 42) that pools valid pair instances and keeps repeated conditions within each pair; they omit CVE/project clustering.")
+table("reasoning_gains.tex", r"Reasoning-variant minus non-reasoning P-C and signed separation $D$",
+      "tab:reasoninggain", "l||rr|rr", head2("Family", [("P-C", [r"$\Delta$", r"95\% CI"]), ("$D$", [r"$\Delta$", r"95\% CI"])]),
+      [[f, sg(d1), f"[{sg(lo)}, {sg(hi)}]", sg(d2), f"[{sg(dlo)}, {sg(dhi)}]"] for f, d1, lo, hi, d2, dlo, dhi in gains])
 NUM["reasoning_gains"] = {f: dict(dPC=d1, lo=lo, hi=hi, dD=d2, dlo=dlo, dhi=dhi) for f, d1, lo, hi, d2, dlo, dhi in gains}
 NUM["groups"] = {g: dict(PC=mu["PC"], D=mu["PC"] - mu["PR"]) for g, mu in grp.items()}
 cellbest = max([((m, s, sc), trial_mean(df[(df.model == m) & (df.prompts == s) & (df.scope == sc)])[0]["PC"])
                 for m in MODELS for s in ("zero", "rag") for sc in SCOPES], key=lambda x: x[1])
 NUM["best_cell"] = dict(cell=cellbest[0], PC=cellbest[1])
+
+# ---- per-model D contrasts against zero-shot (RAG, SFT): same bootstrap ---- #
+def boot_dD(a, b):
+    """95% pair-cluster bootstrap interval of D(b) - D(a) over pair-outcome dicts a, b."""
+    random.seed(42); out = []
+    d = lambda o, S: (sum(o[p][0] for p in S) - sum(o[p][2] for p in S)) / max(sum(o[p][1] for p in S), 1)
+    for _ in range(2000):
+        samp = [random.choice(pairs) for _ in pairs]; out.append(d(b, samp) - d(a, samp))
+    out.sort(); return out[49], out[1949]
+Dmt = lambda m, s, sc=None: (lambda mu: mu["PC"] - mu["PR"])(MT[(m, s)] if sc is None else
+                               trial_mean(df[(df.model == m) & (df.prompts == s) & (df.scope == sc)])[0])
+NUM["dD_vs_zero"] = {}
+for m in MODELS:
+    z = pair_outcomes(m, ("zero",))
+    NUM["dD_vs_zero"][m] = {
+        "rag": (Dmt(m, "rag") - Dmt(m, "zero"), *boot_dD(z, pair_outcomes(m, ("rag",)))),
+        "sft": (Dmt(m, "sft") - Dmt(m, "zero"), *boot_dD(z, pair_outcomes(m, ("sft",)))),
+        "sft_function": (Dmt(m, "sft", "function") - Dmt(m, "zero", "function"),
+                         *boot_dD(pair_outcomes(m, ("zero",), "function"), pair_outcomes(m, ("sft",), "function"))),
+        "zero_D": Dmt(m, "zero"), "sft_D": Dmt(m, "sft"),
+        "zero_D_function": Dmt(m, "zero", "function"), "sft_D_function": Dmt(m, "sft", "function")}
 
 # ---- SFT prediction distributions ----------------------------------------- #
 rows = []
@@ -239,22 +286,22 @@ for m, n in zip(MODELS, NAMES):
     tpr = np.mean([g[g.label.astype(bool)].predict.astype(int).mean() for g in per])
     fpr = np.mean([g[~g.label.astype(bool)].predict.astype(int).mean() for g in per])
     mu = MT[(m, "sft")]
-    rows.append([n] + [f3(x) for x in (q, tpr, fpr, mu["PC"], mu["PR"])])
+    rows.append([n] + [f3(x) for x in (q, tpr, fpr, mu["PC"], mu["PR"])] + [sg(Dmt(m, "zero")), sg(mu["PC"] - mu["PR"])])
     NUM["sft"][m] = dict(q=q, TPR=tpr, FPR=fpr, PC=mu["PC"], PR=mu["PR"], D=mu["PC"] - mu["PR"])
-table("sft_predictions.tex", r"SFT prediction distributions. $q$: fraction predicted vulnerable; $\dagger$: reasoning variant. Rates are trial means, pooling scopes.",
-      "tab:sftpred", "lrrrrr", r"Model & $q$ & TPR & FPR & P-C & P-R", rows,
-      "TPR/FPR use scored functions; pair outcomes require both members. Similar marginal rates do not prove input independence.")
+table("sft_predictions.tex", r"SFT prediction distributions",
+      "tab:sftpred", "l||rrr|rr|rr", head2("Model", [("Classification", ["$q$", "TPR", "FPR"]), ("Pair-wise", ["P-C", "P-R"]),
+                                                     ("$D$", ["Base", "SFT"])]), rows)
 
 # ---- tokens / response time ------------------------------------------------ #
 eff = df.groupby(["prompts", "scope"])[["tokens", "time(s)"]].mean()
-table("tokens.tex", "Mean estimated prompt tokens by strategy and scope (models, samples, and trials pooled).", "tab:tokens", "lrrr",
-      "Strategy & Function & File & Repository",
+table("tokens.tex", "Mean estimated prompt tokens by prompting strategy and input scope", "tab:tokens", "l||rrr",
+      head2("Strategy", [("Input scope", ["Function", "File", "Repository"])]),
       [[n] + [f"{eff.loc[(s, sc), 'tokens']:,.0f}" for sc in SCOPES] for s, n in [("zero", "Zero-shot"), ("rag", "RAG"), ("sft", "SFT")]])
 df["reasoning"] = df.model.isin(REASONING)
 rt = df.groupby(["reasoning", "prompts", "scope"])["time(s)"].mean().groupby(["reasoning", "prompts"]).mean()
-table("response_time.tex", "Mean end-to-end response time per request (seconds), pooling scopes, samples, trials, and the three model configurations in each group.",
-      "tab:responsetime", "lrrr", "Model group & Zero-shot & RAG & SFT",
-      [["Reasoning" if r else "Non-reasoning"] + [f"{rt.loc[(r, s)]:.2f}" for s in STRATS] for r in (False, True)])
+table("response_time.tex", "Mean response time per request by model group and prompting strategy",
+      "tab:responsetime", "l||rrr", head2("Model group", [("Response time (s)", ["Zero-shot", "RAG", "SFT"])]),
+      [["Reasoning" if r else "Non-reasoning"] + [f"{rt.loc[(r, s)]:.1f}" for s in STRATS] for r in (False, True)])
 NUM["tokens"] = {f"{s}|{sc}": float(eff.loc[(s, sc), "tokens"]) for s in STRATS for sc in SCOPES}
 NUM["response_time"] = {f"{'reason' if r else 'direct'}|{s}": float(rt.loc[(r, s)]) for r in (False, True) for s in STRATS}
 

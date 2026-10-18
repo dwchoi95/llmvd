@@ -61,16 +61,21 @@ def main():
     res = {name: stats(repo, ctl, rows) for name, (repo, ctl) in TOKENIZERS.items()}
     (out / "tables").mkdir(parents=True, exist_ok=True)
     (out / "sft_truncation.json").write_text(json.dumps(res, indent=1) + "\n")
-    body = [f"{sc.capitalize()} & {name} & " + " & ".join(
-                f"{100 * v[f'{sc}|{k}'] / v[f'{sc}|n']:.1f}" for k in ("truncated", "target_full", "target_absent")) + r" \\"
-            for sc in SCOPES for name, v in res.items()]
+    pct = lambda v, sc, k: (lambda x: "-" if x == 0 else f"{x:.1f}")(100 * v[f"{sc}|{k}"] / v[f"{sc}|n"])
+    body = []
+    for si, sc in enumerate(SCOPES):
+        body += [r"\midrule"] if si else []
+        body += [(rf"\multirow{{{len(res)}}}{{*}}{{{sc.capitalize()}}}" if ni == 0 else "") + f" & {name} & "
+                 + " & ".join(pct(v, sc, k) for k in ("truncated", "target_full", "target_absent")) + r" \\"
+                 for ni, (name, v) in enumerate(res.items())]
     (out / "tables" / "training_reconstruction.tex").write_text("\n".join([
-        r"\begin{table}[t]",
-        rf"\centering\caption{{SFT inputs exceeding the 4,096-token training limit (\%, {len(rows):,} training functions per row), measured with each base tokenizer and the training encoder.}}\label{{tab:truncation}}",
-        r"\small\setlength{\tabcolsep}{3pt}", r"\begin{tabular}{@{}llrrr@{}}", r"\toprule",
-        r"Scope & Tokenizer & Truncated & Target full & Target absent \\", r"\midrule", *body,
+        r"\begin{table}[h]",
+        r"\centering\caption{SFT training inputs exceeding the 4,096-token limit}\label{tab:truncation}",
+        r"\small\setlength{\tabcolsep}{3pt}", r"\begin{tabular}{@{}ll||r|rr@{}}", r"\toprule",
+        r"\multirow{2}{*}{\textbf{Scope}} & \multirow{2}{*}{\textbf{Tokenizer}} & \multicolumn{1}{c|}{\textbf{Truncated}} & \multicolumn{2}{c}{\textbf{Target block (\%)}} \\",
+        r"\cline{3-5}",
+        r"\rule{0pt}{2.6ex} & & (\%) & Full & Absent \\", r"\midrule", *body,
         r"\bottomrule", r"\end{tabular}",
-        r"\par\smallskip\begin{minipage}{\linewidth}\footnotesize Truncation keeps the last tokens. Target columns refer to the leading target-function block; file inputs repeat its code inside the whole-file block. Qwen3 variants and Mistral/Magistral share tokenizers. Boundary positions are measured to within one or two tokens.\end{minipage}",
         r"\end{table}", ""]))
     print(json.dumps(res, indent=1))
 

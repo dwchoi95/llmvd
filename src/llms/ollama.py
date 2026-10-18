@@ -67,7 +67,7 @@ class OLLAMA:
     #   label -> bool | None   (None when neither answer token is observed)
     #   score -> P(vulnerable) in [0,1] | None
     # For zero-shot the answer is a single token (max_tokens small); for
-    # reasoning prompts (CoT/verify) pass a larger max_tokens and the decision
+    # reasoning models pass a larger max_tokens and the decision
     # token is located by scanning for the LAST positive/negative answer token.
     # ------------------------------------------------------------------ #
     # forces a valid {"vulnerable": 0|1} for direct strategies so large inputs

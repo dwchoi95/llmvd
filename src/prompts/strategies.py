@@ -21,10 +21,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Strategy:
-    name: str          # results key: "zero" | "rag" | "sft" | "cot"
+    name: str          # results key: "zero" | "rag" | "sft"
     prompt_dir: str    # which src/prompts/<dir>/ folder to render from
     uses_examples: bool  # rag injects retrieved vul/non-vul examples
-    free_form: bool = False  # cot: no JSON-schema forcing; model reasons in-channel before the verdict
 
 
 STRATEGIES: dict[str, Strategy] = {
@@ -32,12 +31,6 @@ STRATEGIES: dict[str, Strategy] = {
     "rag":  Strategy("rag",  "rag",  uses_examples=True),
     # sft reuses the zero prompt; the intervention is the fine-tuned model
     "sft":  Strategy("sft",  "zero", uses_examples=False),
-    # cot — a PROMPT-level reasoning control: same inputs, but the system
-    # prompt asks for step-by-step reasoning before the final JSON verdict.
-    # Free-form output (no schema forcing) so non-reasoning models get an
-    # in-channel scratchpad; used to test whether "reasoning" is a model
-    # property or merely permission to reason (threats: construct validity).
-    "cot":  Strategy("cot",  "cot",  uses_examples=False, free_form=True),
 }
 
 DEFAULT_STRATEGIES = ["zero", "rag"]

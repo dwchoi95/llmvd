@@ -81,7 +81,7 @@ python run.py -d data/FuncFileRepo.test.jsonl -m qwen3-30b-thinking --reasoning 
 | `-l`  | `--limit`         | `32`                             | Async concurrency (in-flight requests). |
 | `-e`  | `--executions`    | `1`                              | Trials per condition (repeat to average run-to-run noise). |
 | `-r`  | `--reset`         | `False`                          | Ignore existing saved runs and recompute. |
-| `-p`  | `--strategies`    | `zero,rag`                       | Comma-separated: `zero`, `rag`, `sft`, `cot`. |
+| `-p`  | `--strategies`    | `zero,rag`                       | Comma-separated: `zero`, `rag`, `sft`. |
 |       | `--reasoning`     | `False`                          | Mark the model as reasoning (larger output budget, free-form). |
 |       | `--example`       | auto                             | RAG demonstration file (defaults to `data/FuncFileRepo.example.jsonl`). |
 |       | `--control-token` | `None`                           | e.g. `/think` or `/no_think` for the Nemotron hybrid. |
